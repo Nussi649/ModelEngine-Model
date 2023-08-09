@@ -1,0 +1,7 @@
+flask
+gunicorn
+neo4j==5.7.0
+neo4j-python-migrations
+python-dotenv
+black
+multidict

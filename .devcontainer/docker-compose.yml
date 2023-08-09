@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  app:
+    image: modelengine-model_dev-image
+    volumes:
+      - ../flask:/workspace
+      - ../model_code:/data/model_code
+    working_dir: /workspace
+    ports:
+      - "5000:5000"
+    networks:
+      - internal
+    depends_on:
+      - neo4j
+
+  neo4j:
+    image: neo4j:4.4.19
+    environment:
+      - NEO4J_AUTH=none
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - ../neo4j/dbms:/data/dbms
+    networks:
+      - internal
+
+networks:
+  internal:

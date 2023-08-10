@@ -1,0 +1,4 @@
+Assumptions about code:
+Non-abstract Classes:
+    - have a key
+    - key is first argument in constructor

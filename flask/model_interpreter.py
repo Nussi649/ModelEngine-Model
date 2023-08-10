@@ -105,12 +105,44 @@ class ModelInterpreter:
         object_instance = target_class(**args)
 
         # run query on database to store object as node
-        query = create_object_query.format(class_name=class_name)
+        query_create = create_object_query.format(class_name=class_name)
+        # separate attributes from references. distinguishing property is whether the member has a "key" attribute (which only Class objects have)
+        attrs = {k: v for k, v in args.items() if not hasattr(v, 'key')}
+        user_refs = {k: v for k, v in args.items() if hasattr(v, 'key')}
+        refs = {}
+        for ref_name, ref_object in user_refs.items():
+            inv_rel = INV_REL_MAP[ref_name]
+            refs[ref_name] = {'object': ref_object, 'inv_type': inv_rel}
         with self.driver.session() as session:
-            result = session.run(query, attributes=args)
-            summary = result.consume()
-            if summary.counters.nodes_created != 1:
+            creation_result = session.run(query_create, attributes=attrs)
+            creation_summary = creation_result.consume()
+            if creation_summary.counters.nodes_created != 1:
                 raise RuntimeError(f"Failed to create a node for class {class_name} with properties {args}")
+            # add relationships for references
+            # start creating query
+            query_relate = f"MATCH (a:{class_name} {{{key_name}: {args[key_name]}}})"
+            # continue by matching all involved nodes - assumed to be existent because otherwise there could be no program object representation of them
+            for ref_name, ref_data in refs.items():
+                ref_class_name = type(ref_data['object']).__name__
+                ref_key_value = ref_data['object'].key
+                query_relate += f"\nMATCH (b_{ref_name}:{ref_class_name} {{'key': {ref_key_value}}})"
+
+            rel_count = 0
+            # continue by creating relationships
+            for ref_name, ref_data in refs.items():
+                relationship_type = ref_name.upper() # capitalize the variable name to match naming convention
+                inv_rel_type = ref_data['inv_type'].upper() if ref_data['inv_type'] is not None else "" # capitalize again
+                query_relate += f"\nCREATE (a)-[:{relationship_type}]->(b_{ref_name})"
+                rel_count += 1
+                if inv_rel_type:
+                    query_relate += f"\nCREATE (b_{ref_name})-[:{inv_rel_type}]->(a)"
+                    rel_count += 1
+            relate_result = session.run(query_relate)
+            relate_summary = relate_result.consume()
+            rel_count_created = relate_summary.counters.relationships_created
+            if rel_count_created != rel_count:
+                raise RuntimeError(f"Failed to create all intended relationships for new node {args[key_name]} of type {class_name}: {rel_count_created}/{rel_count}")
+
         # store object in register
         register[object_instance.key] = object_instance
 

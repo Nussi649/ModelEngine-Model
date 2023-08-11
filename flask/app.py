@@ -1,4 +1,5 @@
 import os
+import threading
 from flask import Flask, render_template, jsonify, request
 from dotenv import load_dotenv
 from neo4j import GraphDatabase
@@ -14,8 +15,19 @@ AUTH = ("neo4j", os.getenv("NEO4J_PASSWORD"))
 RESET_PASSWORD ="K€N0Bi"
 MODEL_INTERPRETER = ModelInterpreter(URI, AUTH, "res_trans.py")
 
+# Function to handle terminal input
+def terminal_input():
+    while True:
+        command = input("command: ")
+        result = MODEL_INTERPRETER.process_request(command)
+        print(result)
+
 # Configure the logging level and format
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+# Create a separate thread to run the terminal_input function
+terminal_thread = threading.Thread(target=terminal_input)
+terminal_thread.start()
 
 @app.route("/")
 def status():
@@ -54,8 +66,7 @@ def process_request():
     """
     post_data = request.get_json()
     result = MODEL_INTERPRETER.process_request(post_data["command"])
-    return jsonify({"status": "ok", "msg": result})
-
+    return jsonify({"status": "ok", "output": result["output"], "result": result["result"]})
 
 if __name__ == "__main__":
     app.run(

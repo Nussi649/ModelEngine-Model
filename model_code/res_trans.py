@@ -32,9 +32,9 @@ class Unit:
 class Value:
 
     key_name = 'identifier'
-    value: float
-    unit: 'Unit'
-    used_in: 'ModelObject'
+    value: float = None
+    unit: 'Unit' = None
+    used_in: 'ModelObject' = None
 
     def __init__(self, identifier: str,
                  value: float,
@@ -54,7 +54,7 @@ class Value:
         return self._identifier
 
     def __str__(self):
-        return f'(Value) {self.key}'
+        return f'(Value) {self.value} ' + self.unit.name
 
 
 class Resource:

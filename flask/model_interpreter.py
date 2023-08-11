@@ -6,9 +6,16 @@ from abc import ABC
 from neo4j import GraphDatabase
 from types import ModuleType
 from pathlib import Path
+from typing import Iterable, get_args, get_type_hints
 
-find_object_query = "MATCH (n:{class_name}) WHERE n.{key_name} = $key_value RETURN n"
 create_object_query = "CREATE (n:{class_name}) SET n = $attributes"
+get_object_query = """
+    MATCH (n:{class_name}) WHERE n.{key_name} = '{key_value}'
+    OPTIONAL MATCH (n)-[r]->(related)
+    RETURN n, collect(r) as relationships, collect(related) as related_nodes
+    """
+
+BASIC_TYPES = {float, int, str}
 
 class ModuleUnavailableError(RuntimeError):
     pass
@@ -16,6 +23,8 @@ class ModuleUnavailableError(RuntimeError):
 class ModelInterpreter:
     loaded_module: ModuleType
     driver: GraphDatabase.driver
+    execution_scope: dict
+    class_types: dict
 
 # region Constructor and @property Attributes
 
@@ -69,6 +78,8 @@ class ModelInterpreter:
                     # Create a dictionary with the desired name
                     dict_name = f"objects_{name}"
                     setattr(self.loaded_module, dict_name, {})
+        self.execution_scope = dict(self.loaded_module.__dict__)
+        self.cache_class_types()
 
     def resolve_class_name(self, class_name: str):
         if self.loaded_module is None:
@@ -77,6 +88,31 @@ class ModelInterpreter:
         if target_class is None:
             raise ValueError(f"Error while trying to resolve Class {class_name}: Class not found.")
         return target_class
+    
+    def cache_class_types(self):
+        self.class_types = {}
+        # Iterate over the attributes of the module
+        for name, obj in inspect.getmembers(self.loaded_module):
+            # Check if the attribute is a class
+            if inspect.isclass(obj):
+                # Check if class is abstract
+                if not (issubclass(type(obj), ABC) or hasattr(obj, '__abstractmethods__')):
+                    # Get the resolved type hints for the class
+                    type_hints = get_type_hints(obj)
+                    # Dictionary to hold the attribute types for this class
+                    attribute_types = {}
+
+                    # Iterate over the type hints
+                    for attr_name, attr_type in type_hints.items():
+                        # Check if the attribute type is a generic type (e.g., List[Class])
+                        if hasattr(attr_type, '__origin__'):
+                            attr_type = get_args(attr_type)[0]
+
+                        # Store the attribute type in the dictionary
+                        attribute_types[attr_name] = attr_type
+
+                    # Store the attribute types for this class in the main dictionary
+                    self.class_types[name] = attribute_types
 
 # endregion                    
 
@@ -111,7 +147,7 @@ class ModelInterpreter:
         user_refs = {k: v for k, v in args.items() if hasattr(v, 'key')}
         refs = {}
         for ref_name, ref_object in user_refs.items():
-            inv_rel = INV_REL_MAP[ref_name]
+            inv_rel = self.loaded_module.INV_REL_MAP.get(ref_name)
             refs[ref_name] = {'object': ref_object, 'inv_type': inv_rel}
         with self.driver.session() as session:
             creation_result = session.run(query_create, attributes=attrs)
@@ -119,29 +155,31 @@ class ModelInterpreter:
             if creation_summary.counters.nodes_created != 1:
                 raise RuntimeError(f"Failed to create a node for class {class_name} with properties {args}")
             # add relationships for references
-            # start creating query
-            query_relate = f"MATCH (a:{class_name} {{{key_name}: {args[key_name]}}})"
-            # continue by matching all involved nodes - assumed to be existent because otherwise there could be no program object representation of them
-            for ref_name, ref_data in refs.items():
-                ref_class_name = type(ref_data['object']).__name__
-                ref_key_value = ref_data['object'].key
-                query_relate += f"\nMATCH (b_{ref_name}:{ref_class_name} {{'key': {ref_key_value}}})"
+            if refs.keys:
+                # start creating query
+                query_relate = f"MATCH (a:{class_name} {{{key_name}: '{args[key_name]}'}})"
+                # continue by matching all involved nodes - assumed to be existent because otherwise there could be no program object representation of them
+                for ref_name, ref_data in refs.items():
+                    ref_class_name = type(ref_data['object']).__name__
+                    ref_key_name = ref_data['object'].key_name
+                    ref_key_value = ref_data['object'].key
+                    query_relate += f"\nMATCH (b_{ref_name}:{ref_class_name} {{{ref_key_name}: '{ref_key_value}'}})"
 
-            rel_count = 0
-            # continue by creating relationships
-            for ref_name, ref_data in refs.items():
-                relationship_type = ref_name.upper() # capitalize the variable name to match naming convention
-                inv_rel_type = ref_data['inv_type'].upper() if ref_data['inv_type'] is not None else "" # capitalize again
-                query_relate += f"\nCREATE (a)-[:{relationship_type}]->(b_{ref_name})"
-                rel_count += 1
-                if inv_rel_type:
-                    query_relate += f"\nCREATE (b_{ref_name})-[:{inv_rel_type}]->(a)"
+                rel_count = 0
+                # continue by creating relationships
+                for ref_name, ref_data in refs.items():
+                    relationship_type = ref_name.upper() # capitalize the variable name to match naming convention
+                    inv_rel_type = ref_data['inv_type'].upper() if ref_data['inv_type'] is not None else "" # capitalize again
+                    query_relate += f"\nCREATE (a)-[:{relationship_type}]->(b_{ref_name})"
                     rel_count += 1
-            relate_result = session.run(query_relate)
-            relate_summary = relate_result.consume()
-            rel_count_created = relate_summary.counters.relationships_created
-            if rel_count_created != rel_count:
-                raise RuntimeError(f"Failed to create all intended relationships for new node {args[key_name]} of type {class_name}: {rel_count_created}/{rel_count}")
+                    if inv_rel_type:
+                        query_relate += f"\nCREATE (b_{ref_name})-[:{inv_rel_type}]->(a)"
+                        rel_count += 1
+                relate_result = session.run(query_relate)
+                relate_summary = relate_result.consume()
+                rel_count_created = relate_summary.counters.relationships_created
+                if rel_count_created != rel_count:
+                    raise RuntimeError(f"Failed to create all intended relationships for new node {args[key_name]} of type {class_name}: {rel_count_created}/{rel_count}")
 
         # store object in register
         register[object_instance.key] = object_instance
@@ -167,19 +205,20 @@ class ModelInterpreter:
         # get key attribute name
         key_name = getattr(target_class, 'key_name')
         # check if object exists in database
-        query = find_object_query.format(class_name=class_name, key_name=key_name)
-        params = {'key_value': key}
+        query = get_object_query.format(class_name=class_name, key_name=key_name, key_value=key)
 
         with self.driver.session() as session:
-            result = session.run(query, params)
-            node = result.single()
-            if node:
+            result = session.run(query)
+            record = result.single()
+            if record:
                 # Node found in the database
                 # Extract the attributes from the node
-                attributes = {name: value for name, value in node['n'].items()}
-
+                attributes = {name: value for name, value in record['n'].items()}
+                # Extract relationships by attribute name (using relationship_attributes)
+                relationships = record['relationships']
+                related_nodes = record['related_nodes']
                 # Create an instance of the target class using the extracted attributes
-                object_instance = target_class(**attributes)
+                object_instance = target_class(**attributes, **relationships)
 
                 # Store the object in the register and return it
                 register[key] = object_instance
@@ -201,17 +240,32 @@ class ModelInterpreter:
 
     def process_request(self, input: str):
         # get execution scope
-        execution_scope = {**dict(self.loaded_module.__dict__), 'self': self}
+        self.execution_scope['self'] = self
         # Capture the standard output
         captured_output = io.StringIO()
         sys.stdout = captured_output
 
-        # Execute the code
-        exec(input, execution_scope)
+        # Execute the code and capture the result of the last expression
+        result = None
+        try:
+            # If the input contains '=', assume it's an assignment and use exec
+            if '=' in input:
+                # Execute the assignment
+                exec(input, self.execution_scope)
+                # Parse the variable name and retrieve its value
+                var_name = input.split('=')[0].strip()
+                result = self.execution_scope.get(var_name)
+            else:
+                # Otherwise, assume it's an expression and use eval
+                result = eval(input, self.execution_scope)
+        except Exception as e:
+            result = str(e)
 
         # Reset the standard output
         sys.stdout = sys.__stdout__
 
         # Get the captured output as a string
-        return captured_output.getvalue()
+        output = captured_output.getvalue()
+
+        return {"output": output, "result": str(result)}
     

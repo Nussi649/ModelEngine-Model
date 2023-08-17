@@ -8,30 +8,37 @@ RUN apk add curl
 # Create a non-root user for added security
 RUN adduser -D nonroot
 
-# Create directories and set appropriate permissions
-RUN mkdir /workspace && chown -R nonroot:nonroot /workspace
+# Set the home directory for the non-root user
+ENV HOME=/home/nonroot
+
+# Set ownership for the home directory
+RUN chown nonroot:nonroot $HOME
+
+# Create /workspace directory and set ownership
+RUN mkdir /workspace
+RUN chown nonroot:nonroot /workspace
+
+# Create log directories aand change ownership
 RUN mkdir -p /var/log/flask-app && touch /var/log/flask-app/flask-app.err.log && touch /var/log/flask-app/flask-app.out.log
 RUN chown -R nonroot:nonroot /var/log/flask-app
 
 # Set the working directory
 WORKDIR /workspace
 
-# Switch to non-root user
+# Python setup
+ENV FLASK_APP=app.py
+
+# Copy the requirements.txt file into the container
+COPY flask/requirements.txt /workspace/requirements.txt
+
+# Install the Python dependencies as root
+RUN pip install --no-cache-dir -r /workspace/requirements.txt
+
+# Switch to nonroot user
 USER nonroot
 
-# Copy all the files to the container
-#COPY --chown=nonroot:nonroot . .
-#COPY --chown=nonroot:nonroot ../flask/requirements.txt ./requirements.txt
-
-
-# Set up a virtual environment
-ENV VIRTUAL_ENV=/workspace/venv
-RUN python -m venv $VIRTUAL_ENV
-ENV PATH="$VIRTUAL_ENV/bin:$PATH"
-
-# Python setup
-RUN export FLASK_APP=app.py
-#RUN pip install -r requirements.txt
+# Print permissions for debugging
+RUN ls -ld $HOME
 
 # Define the port number the container should expose
 EXPOSE 5000

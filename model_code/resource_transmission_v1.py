@@ -2,6 +2,10 @@ from typing import List
 from abc import ABC
 from datetime import datetime
 
+class InvalidUsage(Exception):
+    def __str__(self):
+        return 'Direct Constructor usage forbidden. Use generator functions: create_reduced(key) create_full(**args) instead.'
+
 INV_REL_MAP = {
     'direct_constituents': 'parents',
     'conduits_in': 'target',
@@ -109,7 +113,7 @@ class Value:
         return self._identifier
 
     def __str__(self):
-        return f'(Value) {self.value} {self.unit.name}'
+        return f'(Value) {self.key}'
 
 
 class Resource:

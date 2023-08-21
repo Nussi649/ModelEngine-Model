@@ -20,7 +20,8 @@ Attribute
         type (enum, required): data type
             possible values: text, int, float, datetime, pos_geo
         is_key (bool, optional): indicates whether this attribute value has to be unique among all objects of same class
-            exactly one Attribute element within each non-abstract class is required to exhibit is_key="true"
+            exactly one Attribute element within each non-abstract class is required to exhibit is_key="true". the key 
+            attribute has to be of datatype string.
         required (bool, required): indicates whether a value needs to be provided for this attribute or if it's optional
             optional if is_key="true" (which then implies required = true)
     Contains: String
@@ -32,5 +33,6 @@ Reference
         multiplicity (enum, required): indicates how many objects can be referenced
             possible values: mono, multi
         required (bool, required): indicates whether a value needs to be provided for this reference or if it's optional
+        inverse (String, optional): name of the relationship of the related object that is considered the inverse relationship
     Contains: String
         Name of reference (variable name in model code)

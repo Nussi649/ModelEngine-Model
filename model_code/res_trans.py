@@ -19,6 +19,7 @@ class ModelObject(ABC):
 
 class Unit(ModelEntity):
 
+
     def __init__(self,
                  name: str=None, *,
                    mini_mode=False):
@@ -30,7 +31,6 @@ class Unit(ModelEntity):
         # Abort if object is already in full mode
         if not self._mini_mode:
             return False
-
         # Indicate successful upgrade
         self._mini_mode = False
         return True
@@ -42,14 +42,14 @@ class Unit(ModelEntity):
 class Value(ModelEntity):
 
     value: float
-    unit: Unit
-    used_in: ModelObject
+    unit: 'Unit'
+    used_in: 'ModelObject'
 
     def __init__(self,
                  identifier: str=None,
                  value: float=None,
-                 unit: Unit=None,
-                 used_in: ModelObject=None, *,
+                 unit: 'Unit'=None,
+                 used_in: 'ModelObject'=None, *,
                    mini_mode=False):
         if not identifier:
             raise ValueError('Attribute identifier is required')
@@ -65,23 +65,18 @@ class Value(ModelEntity):
 
     def upgrade(self,
                 value: float=None,
-                unit: Unit=None,
-                used_in: ModelObject=None):
+                unit: 'Unit'=None,
+                used_in: 'ModelObject'=None):
         # Abort if object is already in full mode
         if not self._mini_mode:
             return False
-
-        # Validate provided parameters
         if value is None:
             raise ValueError('Attribute value is required for upgrade')
+        self.value = value if value is not None else self.value
         if unit is None:
             raise ValueError('Reference unit is required for upgrade')
-
-        # Assign attributes and references
-        self.value = value if value is not None else self.value
         self.unit = unit if unit is not None else self.unit
         self.used_in = used_in if used_in is not None else self.used_in
-
         # Indicate successful upgrade
         self._mini_mode = False
         return True
@@ -95,11 +90,11 @@ class Value(ModelEntity):
 
 class Resource(ModelEntity):
 
-    unit_default: Unit
+    unit_default: 'Unit'
 
     def __init__(self,
                  name: str=None,
-                 unit_default: Unit=None, *,
+                 unit_default: 'Unit'=None, *,
                    mini_mode=False):
         if not name:
             raise ValueError('Attribute name is required')
@@ -110,18 +105,13 @@ class Resource(ModelEntity):
             self.unit_default = unit_default
 
     def upgrade(self,
-                unit_default: Unit=None):
+                unit_default: 'Unit'=None):
         # Abort if object is already in full mode
         if not self._mini_mode:
             return False
-
-        # Validate provided parameters
         if unit_default is None:
             raise ValueError('Reference unit_default is required for upgrade')
-
-        # Assign attributes and references
         self.unit_default = unit_default if unit_default is not None else self.unit_default
-
         # Indicate successful upgrade
         self._mini_mode = False
         return True
@@ -133,8 +123,8 @@ class Resource(ModelEntity):
 class Region(ModelEntity, ModelObject):
 
     osm_id: int
-    direct_constituents: List['Region']
-    parents: List['Region']
+    direct_constituents: List ['Region']
+    parents: List ['Region']
 
     def __init__(self,
                  name: str=None,
@@ -157,16 +147,11 @@ class Region(ModelEntity, ModelObject):
         # Abort if object is already in full mode
         if not self._mini_mode:
             return False
-
-        # Validate provided parameters
-
-        # Assign attributes and references
         self.osm_id = osm_id if osm_id is not None else self.osm_id
         if direct_constituents is not None:
             self.direct_constituents.extend(direct_constituents)
         if parents is not None:
             self.parents.extend(parents)
-
         # Indicate successful upgrade
         self._mini_mode = False
         return True
@@ -179,10 +164,10 @@ class Place(ModelEntity, ModelObject):
 
     osm_id: int
     location: tuple
-    in_region: List['Region']
-    processed_resources: List['Resource']
-    conduits_in: List['Conduit']
-    conduits_out: List['Conduit']
+    in_region: List ['Region']
+    processed_resources: List ['Resource']
+    conduits_in: List ['Conduit']
+    conduits_out: List ['Conduit']
 
     def __init__(self,
                  identifier: str=None,
@@ -216,13 +201,9 @@ class Place(ModelEntity, ModelObject):
         # Abort if object is already in full mode
         if not self._mini_mode:
             return False
-
-        # Validate provided parameters
+        self.osm_id = osm_id if osm_id is not None else self.osm_id
         if location is None:
             raise ValueError('Attribute location is required for upgrade')
-
-        # Assign attributes and references
-        self.osm_id = osm_id if osm_id is not None else self.osm_id
         self.location = location if location is not None else self.location
         if in_region is not None:
             self.in_region.extend(in_region)
@@ -232,7 +213,6 @@ class Place(ModelEntity, ModelObject):
             self.conduits_in.extend(conduits_in)
         if conduits_out is not None:
             self.conduits_out.extend(conduits_out)
-
         # Indicate successful upgrade
         self._mini_mode = False
         return True
@@ -243,17 +223,17 @@ class Place(ModelEntity, ModelObject):
 
 class Conduit(ModelEntity, ModelObject):
 
-    transmits_resource: Resource
-    capacity: Value
-    origin: Place
-    target: Place
+    transmits_resource: 'Resource'
+    capacity: 'Value'
+    origin: 'Place'
+    target: 'Place'
 
     def __init__(self,
                  identifier: str=None,
-                 transmits_resource: Resource=None,
-                 capacity: Value=None,
-                 origin: Place=None,
-                 target: Place=None, *,
+                 transmits_resource: 'Resource'=None,
+                 capacity: 'Value'=None,
+                 origin: 'Place'=None,
+                 target: 'Place'=None, *,
                    mini_mode=False):
         if not identifier:
             raise ValueError('Attribute identifier is required')
@@ -273,30 +253,25 @@ class Conduit(ModelEntity, ModelObject):
             self.target = target
 
     def upgrade(self,
-                transmits_resource: Resource=None,
-                capacity: Value=None,
-                origin: Place=None,
-                target: Place=None):
+                transmits_resource: 'Resource'=None,
+                capacity: 'Value'=None,
+                origin: 'Place'=None,
+                target: 'Place'=None):
         # Abort if object is already in full mode
         if not self._mini_mode:
             return False
-
-        # Validate provided parameters
         if transmits_resource is None:
             raise ValueError('Reference transmits_resource is required for upgrade')
+        self.transmits_resource = transmits_resource if transmits_resource is not None else self.transmits_resource
         if capacity is None:
             raise ValueError('Reference capacity is required for upgrade')
+        self.capacity = capacity if capacity is not None else self.capacity
         if origin is None:
             raise ValueError('Reference origin is required for upgrade')
+        self.origin = origin if origin is not None else self.origin
         if target is None:
             raise ValueError('Reference target is required for upgrade')
-
-        # Assign attributes and references
-        self.transmits_resource = transmits_resource if transmits_resource is not None else self.transmits_resource
-        self.capacity = capacity if capacity is not None else self.capacity
-        self.origin = origin if origin is not None else self.origin
         self.target = target if target is not None else self.target
-
         # Indicate successful upgrade
         self._mini_mode = False
         return True

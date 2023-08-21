@@ -3,196 +3,176 @@ from typing import List
 # region Helper Functions for Variable Definitions
 
 def generate_attribute_code(attr_name: str, attr_details: dict) -> str:
-    """
-    Convert attribute details into a type-annotated string.
-    
-    PARAMETERS:
-    - attr_name (str): The name of the attribute.
-    - attr_details (dict): The details of the attribute, including its type.
-
-    RETURNS:
-    - A string representing the type-annotated attribute.
-    """
+    """Generate code for attribute with type annotations."""
     return f"{attr_name}: {attr_details['type']}"
 
 def generate_reference_code(ref_name: str, ref_details: dict) -> str:
-    """
-    Convert reference details into a type-annotated string.
-    
-    PARAMETERS:
-    - ref_name (str): The name of the reference.
-    - ref_details (dict): The details of the reference, including its type and multiplicity.
-
-    RETURNS:
-    - A string representing the type-annotated reference.
-    """
-    ref_type = ref_details["type"]
-    if ref_details["multiplicity"] == "multi":
-        ref_type = f"List['{ref_type}']"
-    return f"{ref_name}: {ref_type}"
+    """Generate code for reference with type annotations."""
+    ref_type = f"'{ref_details['type']}'"
+    return f"{ref_name}: {f'List [{ref_type}]' if ref_details['multiplicity'] == 'multi' else f'{ref_type}'}"
 
 def generate_init(class_details: dict) -> List[str]:
     """
-    FUNCTION generate_init
-    PARAMS:
-    class_details (dict): details about class as per data format used in ModelSpecifications
-    RETURNS:
-    List of Codeline Strings representing the init function
+    Generate the __init__ method for the class.
+    
+    Args:
+    - class_details (dict): Details about class as per data format used in ModelSpecifications.
+    
+    Returns:
+    - List of Codeline Strings representing the init function.
     """
-    # Generate the parameter string for the method definition
     key_name = class_details['key']
-    # attributes can be assumed to contain key attribute because generate_init would not be called for an abstract class
-    attributes = dict(class_details.get("attributes", {}))
-    attributes.pop(class_details['key'])
+    attributes = class_details.get("attributes", {}).copy()
+    references = class_details.get("references", {})
+
+    params = [
+        "self",
+        *[f"{attr}: {details['type']}=None" for attr, details in attributes.items()],
+        *[
+            f"{ref}: List['{ref_details['type']}']=None" if ref_details['multiplicity'] == 'multi' 
+            else f"{ref}: '{ref_details['type']}'=None" 
+            for ref, ref_details in references.items()
+        ]
+    ]
+    # compile params together with line breaks for readability
+    param_string = ",\n                 ".join(params) + f", *,\n{' ' * 19}mini_mode=False"
 
     # Initialize a list to hold lines of the __init__ method
-    init_lines = []
-    all_params = ["self"]
-    all_params += [f"{attr_name}: {attr_details['type']}=None" for attr_name, attr_details in class_details.get("attributes", {}).items()]
-    for ref_name, ref_details in class_details.get("references", {}).items():
-        ref_type = ref_details["type"]
-        if ref_details["multiplicity"] == "multi":
-            ref_type = f"List['{ref_type}']"
-        all_params.append(f"{ref_name}: {ref_type}=None")
-    param_string = ",\n                 ".join(all_params) + ", *,\n                   mini_mode=False"
+    init_lines = [
+        f"{' ' * 4}def __init__({param_string}):",
+        f"{' ' * 4}    if not {key_name}:",
+        f"{' ' * 4}        raise ValueError('Attribute {key_name} is required')",
+        f"{' ' * 4}    super().__init__(key={key_name}, mini_mode=mini_mode)"
+    ]
     
-    # Add method definition with parameters
-    init_lines.append(f"    def __init__({param_string}):")
+    # From here on, key attribute will be only redundant
+    attributes.pop(key_name) # attributes can be assumed to contain key attribute because generate_init would not be called for an abstract class
 
-    # Validate if key attribute is provided - class can be assumed to be non-abstract because otherwise there would be no init
-    init_lines.extend([f"        if not {key_name}:",
-                       f"            raise ValueError('Attribute {key_name} is required')"])
-    
-    # Add super initialization
-    init_lines.append(f"        super().__init__(key={key_name}, mini_mode=mini_mode)")
-    
-    if attributes or class_details.get("references"):
+    if attributes or references:
         # Mini mode check
-        init_lines.append("        if not mini_mode:")
-        # Check and assign required attributes and references
-        for attr_name, attr_details in class_details.get("attributes", {}).items():
-            if attr_name == key_name:
-                continue
-            if attr_details.get("required"):
-                init_lines.append(f"            if {attr_name} is None:")
-                init_lines.append(f"                raise ValueError('Attribute {attr_name} is required')")
-            init_lines.append(f"            self.{attr_name} = {attr_name}")
+        init_lines.append(f"{' ' * 8}if not mini_mode:")
+        # Check and assign attributes
+        for attr, details in attributes.items():
+            if details.get("required"):
+                init_lines.extend([
+                    f"{' ' * 12}if {attr} is None:",
+                    f"{' ' * 12}    raise ValueError('Attribute {attr} is required')"
+                ])
+            init_lines.append(f"{' ' * 12}self.{attr} = {attr}")
 
-        for ref_name, ref_details in class_details.get("references", {}).items():
-            if ref_details.get("required"):
-                init_lines.append(f"            if {ref_name} is None:")
-                init_lines.append(f"                raise ValueError('Reference {ref_name} is required')")
-            if ref_details["multiplicity"] == "multi":
-                init_lines.append(f"            self.{ref_name}.extend({ref_name})")
+        # Check and assign references
+        for ref, details in references.items():
+            if details.get("required"):
+                init_lines.extend([
+                    f"{' ' * 12}if {ref} is None:",
+                    f"{' ' * 12}    raise ValueError('Reference {ref} is required')"
+                ])
+            if details["multiplicity"] == "multi":
+                init_lines.append(f"{' ' * 12}self.{ref}.extend({ref})")
             else:
-                init_lines.append(f"            self.{ref_name} = {ref_name}")
+                init_lines.append(f"{' ' * 12}self.{ref} = {ref}")
 
+    init_lines.append("")
     return init_lines
 
 def generate_upgrade(class_details: dict) -> List[str]:
     """
-    FUNCTION generate_upgrade
     Generate the upgrade function based on the provided class details.
 
-    PARAMETERS:
+    Args:
     - class_details (dict): Details about class as per data format used in ModelSpecifications.
 
-    RETURNS:
+    Returns:
     - List of Codeline Strings representing the upgrade function.
     """
-
-    # Initialize a list to hold lines of the upgrade method
-    upgrade_lines = [""]
-    
-    # Generate the parameter string for the method definition
     key_name = class_details['key']
-    all_params = ["self"]
-    all_params += [f"{attr_name}: {attr_details['type']}=None" for attr_name, attr_details in class_details.get("attributes", {}).items() if attr_name != key_name]
-    for ref_name, ref_details in class_details.get("references", {}).items():
-        ref_type = ref_details["type"]
-        if ref_details["multiplicity"] == "multi":
-            ref_type = f"List['{ref_type}']"
-        all_params.append(f"{ref_name}: {ref_type}=None")
-    param_string = ",\n                ".join(all_params)
-    
-    # Start the method definition
-    upgrade_lines.append(f"    def upgrade({param_string}):")
-    
-    # Check if object is in full mode and return False if so
-    upgrade_lines.extend([
-        "        # Abort if object is already in full mode",
-        "        if not self._mini_mode:",
-        "            return False"
-    ])
+    attributes = class_details.get("attributes", {}).copy()
+    attributes.pop(key_name) # key attribute would be redundant for whole function
+    references = class_details.get("references", {})
 
-    # attributes can be assumed to contain key attribute because generate_upgrade would not be called for an abstract class
-    attributes = dict(class_details.get("attributes", {}))
-    attributes.pop(class_details['key'])
+    params = [
+            "self",
+            *[f"{attr}: {details['type']}=None" for attr, details in attributes.items() if attr != key_name],
+            *[
+                f"{ref}: List['{ref_details['type']}']=None" if ref_details['multiplicity'] == 'multi' 
+                else f"{ref}: '{ref_details['type']}'=None" 
+                for ref, ref_details in references.items()
+            ]
+        ]
+    param_string = f",\n{' ' * 16}".join(params)
     
-    if attributes or class_details.get("references", {}):
-        upgrade_lines.append("\n        # Validate provided parameters")
-        # Check and validate required attributes and references
-        for attr_name, attr_details in attributes.items():
-            if not class_details['is_abstract'] and attr_name == class_details['key']:
-                continue
-            if attr_details.get("required"):
-                upgrade_lines.append(f"        if {attr_name} is None:")
-                upgrade_lines.append(f"            raise ValueError('Attribute {attr_name} is required for upgrade')")
-        for ref_name, ref_details in class_details.get("references", {}).items():
-            if ref_details.get("required"):
-                upgrade_lines.append(f"        if {ref_name} is None:")
-                upgrade_lines.append(f"            raise ValueError('Reference {ref_name} is required for upgrade')")
+    upgrade_lines = [
+        f"{' ' * 4}def upgrade({param_string}):",
+        f"{' ' * 4}    # Abort if object is already in full mode",
+        f"{' ' * 4}    if not self._mini_mode:",
+        f"{' ' * 4}        return False"
+    ]
+
+    # Check and assign attributes
+    for attr, details in attributes.items():
+        if details.get("required"):
+            upgrade_lines.extend([
+                f"{' ' * 8}if {attr} is None:",
+                f"{' ' * 8}    raise ValueError('Attribute {attr} is required for upgrade')"
+            ])
+        upgrade_lines.append(f"{' ' * 8}self.{attr} = {attr} if {attr} is not None else self.{attr}")
     
-        # Assign attributes and references
-        upgrade_lines.append("\n        # Assign attributes and references")
-        for attr_name in class_details.get("attributes", {}).keys():
-            if attr_name != key_name:  # Skip the key attribute
-                upgrade_lines.append(f"        self.{attr_name} = {attr_name} if {attr_name} is not None else self.{attr_name}")
-        for ref_name, ref_details in class_details.get("references", {}).items():
-            if ref_details["multiplicity"] == "multi":
-                upgrade_lines.append(f"        if {ref_name} is not None:")
-                upgrade_lines.append(f"            self.{ref_name}.extend({ref_name})")
-            else:
-                upgrade_lines.append(f"        self.{ref_name} = {ref_name} if {ref_name} is not None else self.{ref_name}")
+    # Check and assign references
+    for ref, details in references.items():
+        if details.get("required"):
+            upgrade_lines.extend([
+                f"{' ' * 8}if {ref} is None:",
+                f"{' ' * 8}    raise ValueError('Reference {ref} is required for upgrade')"
+            ])
+        if details["multiplicity"] == "multi":
+            upgrade_lines.extend([
+                f"{' ' * 8}if {ref} is not None:",
+                f"{' ' * 8}    self.{ref}.extend({ref})"
+            ])
+        else:
+            upgrade_lines.append(f"{' ' * 8}self.{ref} = {ref} if {ref} is not None else self.{ref}")
     
     # Set mini_mode to False and return True
     upgrade_lines.extend([
-        "\n        # Indicate successful upgrade",
-        "        self._mini_mode = False",
-        "        return True"
+        f"{' ' * 8}# Indicate successful upgrade",
+        f"{' ' * 8}self._mini_mode = False",
+        f"{' ' * 8}return True"
     ])
 
     return upgrade_lines
     
 # endregion
 
-def generate_class_code(class_name: str, class_details: dict) -> List[str]:
-    class_code = []
-    # Add class definition line
+def generate_class_code(class_name: str, class_details: dict) -> str:
+    """
+    Generate the complete class code based on the provided class name and details.
+    Args:
+    - class_name (str): Name of the class.
+    - class_details (dict): Details about class as per data format used in ModelSpecifications.
+    Returns:
+    - Class code as a string.
+    """
+    attributes = class_details.get("attributes", {})
+    references = class_details.get("references", {})
+    key_name = class_details.get('key', None)
+    extends = class_details.get('extends')
+    base_classes = ', '.join(['ModelEntity', extends] if extends else ['ModelEntity'])
     if class_details['is_abstract']:
-        class_code.append(f'class {class_name}(ABC):')
-    else:
-        extends = class_details.get('extends')
-        class_code.append(f'class {class_name}(ModelEntity' + (f', {extends})' if extends is not None else ")") + ':')
+        base_classes = "ABC"
 
-    # Add empty line after class definition
-    class_code.append('')
+    # Add class definition line
+    class_code = [f"class {class_name}({base_classes}):", ""]
 
-    # set flag to indicate whether to close the variables block with an empty line
-    has_variables = False
     # Define attributes with type annotations
-    for attr_name, attr_details in class_details['attributes'].items():
-        # skip key attribute, will get defined later
-        if not class_details['is_abstract'] and attr_name == class_details['key']:
-            continue
-        class_code.append(f'    {generate_attribute_code(attr_name, attr_details)}')
-        has_variables = True
-    # Define references with type annotations
-    for ref_name, ref_details in class_details['references'].items():
-        class_code.append(f'    {generate_reference_code(ref_name, ref_details)}')
-        has_variables = True
+    for attr, details in attributes.items():
+        if attr != key_name:  # Skip the key attribute
+            class_code.append(f"{' ' * 4}{generate_attribute_code(attr, details)}")
 
-    if has_variables:
+    # Define references with type annotations
+    for ref, details in references.items():
+        class_code.append(f"{' ' * 4}{generate_reference_code(ref, details)}")
+
+    if attributes or references:
         # Add empty line after variable definition
         class_code.append('')
 
@@ -207,9 +187,9 @@ def generate_class_code(class_name: str, class_details: dict) -> List[str]:
     # Add key attribute also as property
     class_code.extend([
         "",
-        "    @property",
-        f"    def {class_details['key']}(self):",
-        f"        return self.key"
+        f"{' ' * 4}@property",
+        f"{' ' * 4}def {class_details['key']}(self):",
+        f"{' ' * 4}    return self.key"
         ])
     # 
     return "\n".join(class_code)

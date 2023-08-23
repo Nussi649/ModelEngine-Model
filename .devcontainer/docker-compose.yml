@@ -5,7 +5,6 @@ services:
     image: modelengine-model_dev-image
     volumes:
       - ../flask:/workspace
-      - ../model_code:/data/model_code
       - ../dm_transformer/dm_specs.py:/workspace/dm_specs.py
       - ../dm_transformer/data_models:/workspace/data_models
     working_dir: /workspace

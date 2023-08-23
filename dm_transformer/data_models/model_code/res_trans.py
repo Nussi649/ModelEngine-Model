@@ -1,7 +1,7 @@
 from typing import List, Optional, Union
 from abc import ABC
 from datetime import datetime
-from model_entity import ModelEntity
+from data_models.model_code.model_entity import ModelEntity
 
 INVERSE_RELATIONSHIPS = {
     'direct_constituents': 'parents',
@@ -21,11 +21,11 @@ class Unit(ModelEntity):
 
 
     def __init__(self,
-                 name: str=None, *,
+                 key: str=None, *,
                    mini_mode=False):
-        if not name:
-            raise ValueError('Attribute name is required')
-        super().__init__(key=name, mini_mode=mini_mode)
+        if not key:
+            raise ValueError('Attribute key is required')
+        super().__init__(key=key, mini_mode=mini_mode)
 
     def upgrade(self):
         # Abort if object is already in full mode
@@ -46,14 +46,14 @@ class Value(ModelEntity):
     used_in: 'ModelObject'
 
     def __init__(self,
-                 identifier: str=None,
                  value: float=None,
+                 key: str=None,
                  unit: 'Unit'=None,
                  used_in: 'ModelObject'=None, *,
                    mini_mode=False):
-        if not identifier:
-            raise ValueError('Attribute identifier is required')
-        super().__init__(key=identifier, mini_mode=mini_mode)
+        if not key:
+            raise ValueError('Attribute key is required')
+        super().__init__(key=key, mini_mode=mini_mode)
         if not mini_mode:
             if value is None:
                 raise ValueError('Attribute value is required')
@@ -72,11 +72,11 @@ class Value(ModelEntity):
             return False
         if value is None:
             raise ValueError('Attribute value is required for upgrade')
-        self.value = value if value is not None else self.value
+        self.value = value if value is not None else getattr(self, 'value', None)
         if unit is None:
             raise ValueError('Reference unit is required for upgrade')
-        self.unit = unit if unit is not None else self.unit
-        self.used_in = used_in if used_in is not None else self.used_in
+        self.unit = unit if unit is not None else getattr(self, 'unit', None)
+        self.used_in = used_in if used_in is not None else getattr(self, 'used_in', None)
         # Indicate successful upgrade
         self._mini_mode = False
         return True
@@ -93,12 +93,12 @@ class Resource(ModelEntity):
     unit_default: 'Unit'
 
     def __init__(self,
-                 name: str=None,
+                 key: str=None,
                  unit_default: 'Unit'=None, *,
                    mini_mode=False):
-        if not name:
-            raise ValueError('Attribute name is required')
-        super().__init__(key=name, mini_mode=mini_mode)
+        if not key:
+            raise ValueError('Attribute key is required')
+        super().__init__(key=key, mini_mode=mini_mode)
         if not mini_mode:
             if unit_default is None:
                 raise ValueError('Reference unit_default is required')
@@ -111,7 +111,7 @@ class Resource(ModelEntity):
             return False
         if unit_default is None:
             raise ValueError('Reference unit_default is required for upgrade')
-        self.unit_default = unit_default if unit_default is not None else self.unit_default
+        self.unit_default = unit_default if unit_default is not None else getattr(self, 'unit_default', None)
         # Indicate successful upgrade
         self._mini_mode = False
         return True
@@ -127,14 +127,14 @@ class Region(ModelEntity, ModelObject):
     parents: List ['Region']
 
     def __init__(self,
-                 name: str=None,
                  osm_id: int=None,
+                 key: str=None,
                  direct_constituents: List['Region']=None,
                  parents: List['Region']=None, *,
                    mini_mode=False):
-        if not name:
-            raise ValueError('Attribute name is required')
-        super().__init__(key=name, mini_mode=mini_mode)
+        if not key:
+            raise ValueError('Attribute key is required')
+        super().__init__(key=key, mini_mode=mini_mode)
         if not mini_mode:
             self.osm_id = osm_id
             self.direct_constituents.extend(direct_constituents)
@@ -147,7 +147,7 @@ class Region(ModelEntity, ModelObject):
         # Abort if object is already in full mode
         if not self._mini_mode:
             return False
-        self.osm_id = osm_id if osm_id is not None else self.osm_id
+        self.osm_id = osm_id if osm_id is not None else getattr(self, 'osm_id', None)
         if direct_constituents is not None:
             self.direct_constituents.extend(direct_constituents)
         if parents is not None:
@@ -170,17 +170,17 @@ class Place(ModelEntity, ModelObject):
     conduits_out: List ['Conduit']
 
     def __init__(self,
-                 identifier: str=None,
                  osm_id: int=None,
                  location: tuple=None,
+                 key: str=None,
                  in_region: List['Region']=None,
                  processed_resources: List['Resource']=None,
                  conduits_in: List['Conduit']=None,
                  conduits_out: List['Conduit']=None, *,
                    mini_mode=False):
-        if not identifier:
-            raise ValueError('Attribute identifier is required')
-        super().__init__(key=identifier, mini_mode=mini_mode)
+        if not key:
+            raise ValueError('Attribute key is required')
+        super().__init__(key=key, mini_mode=mini_mode)
         if not mini_mode:
             self.osm_id = osm_id
             if location is None:
@@ -201,10 +201,10 @@ class Place(ModelEntity, ModelObject):
         # Abort if object is already in full mode
         if not self._mini_mode:
             return False
-        self.osm_id = osm_id if osm_id is not None else self.osm_id
+        self.osm_id = osm_id if osm_id is not None else getattr(self, 'osm_id', None)
         if location is None:
             raise ValueError('Attribute location is required for upgrade')
-        self.location = location if location is not None else self.location
+        self.location = location if location is not None else getattr(self, 'location', None)
         if in_region is not None:
             self.in_region.extend(in_region)
         if processed_resources is not None:
@@ -229,15 +229,15 @@ class Conduit(ModelEntity, ModelObject):
     target: 'Place'
 
     def __init__(self,
-                 identifier: str=None,
+                 key: str=None,
                  transmits_resource: 'Resource'=None,
                  capacity: 'Value'=None,
                  origin: 'Place'=None,
                  target: 'Place'=None, *,
                    mini_mode=False):
-        if not identifier:
-            raise ValueError('Attribute identifier is required')
-        super().__init__(key=identifier, mini_mode=mini_mode)
+        if not key:
+            raise ValueError('Attribute key is required')
+        super().__init__(key=key, mini_mode=mini_mode)
         if not mini_mode:
             if transmits_resource is None:
                 raise ValueError('Reference transmits_resource is required')
@@ -262,16 +262,16 @@ class Conduit(ModelEntity, ModelObject):
             return False
         if transmits_resource is None:
             raise ValueError('Reference transmits_resource is required for upgrade')
-        self.transmits_resource = transmits_resource if transmits_resource is not None else self.transmits_resource
+        self.transmits_resource = transmits_resource if transmits_resource is not None else getattr(self, 'transmits_resource', None)
         if capacity is None:
             raise ValueError('Reference capacity is required for upgrade')
-        self.capacity = capacity if capacity is not None else self.capacity
+        self.capacity = capacity if capacity is not None else getattr(self, 'capacity', None)
         if origin is None:
             raise ValueError('Reference origin is required for upgrade')
-        self.origin = origin if origin is not None else self.origin
+        self.origin = origin if origin is not None else getattr(self, 'origin', None)
         if target is None:
             raise ValueError('Reference target is required for upgrade')
-        self.target = target if target is not None else self.target
+        self.target = target if target is not None else getattr(self, 'target', None)
         # Indicate successful upgrade
         self._mini_mode = False
         return True

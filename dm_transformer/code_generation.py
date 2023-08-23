@@ -23,6 +23,8 @@ def generate_init(class_details: dict) -> List[str]:
     """
     key_name = class_details['key']
     attributes = class_details.get("attributes", {}).copy()
+    if key_name in attributes:
+        attributes['key'] = attributes.pop(key_name)
     references = class_details.get("references", {})
 
     params = [
@@ -40,13 +42,13 @@ def generate_init(class_details: dict) -> List[str]:
     # Initialize a list to hold lines of the __init__ method
     init_lines = [
         f"{' ' * 4}def __init__({param_string}):",
-        f"{' ' * 4}    if not {key_name}:",
-        f"{' ' * 4}        raise ValueError('Attribute {key_name} is required')",
-        f"{' ' * 4}    super().__init__(key={key_name}, mini_mode=mini_mode)"
+        f"{' ' * 4}    if not key:",
+        f"{' ' * 4}        raise ValueError('Attribute key is required')",
+        f"{' ' * 4}    super().__init__(key=key, mini_mode=mini_mode)"
     ]
     
     # From here on, key attribute will be only redundant
-    attributes.pop(key_name) # attributes can be assumed to contain key attribute because generate_init would not be called for an abstract class
+    attributes.pop('key') # attributes can be assumed to contain key attribute because generate_init would not be called for an abstract class
 
     if attributes or references:
         # Mini mode check
@@ -115,7 +117,7 @@ def generate_upgrade(class_details: dict) -> List[str]:
                 f"{' ' * 8}if {attr} is None:",
                 f"{' ' * 8}    raise ValueError('Attribute {attr} is required for upgrade')"
             ])
-        upgrade_lines.append(f"{' ' * 8}self.{attr} = {attr} if {attr} is not None else self.{attr}")
+        upgrade_lines.append(f"{' ' * 8}self.{attr} = {attr} if {attr} is not None else getattr(self, '{attr}', None)")
     
     # Check and assign references
     for ref, details in references.items():
@@ -130,7 +132,7 @@ def generate_upgrade(class_details: dict) -> List[str]:
                 f"{' ' * 8}    self.{ref}.extend({ref})"
             ])
         else:
-            upgrade_lines.append(f"{' ' * 8}self.{ref} = {ref} if {ref} is not None else self.{ref}")
+            upgrade_lines.append(f"{' ' * 8}self.{ref} = {ref} if {ref} is not None else getattr(self, '{ref}', None)")
     
     # Set mini_mode to False and return True
     upgrade_lines.extend([

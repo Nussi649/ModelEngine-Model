@@ -2,6 +2,7 @@ import importlib.util
 import io
 import sys
 import inspect
+import json
 from abc import ABC
 from neo4j import GraphDatabase
 from types import ModuleType
@@ -36,7 +37,8 @@ class ModelInterpreter:
         if model_code is not None:
             self.init_module(self.load_model_code(model_code))
         # Load and parse the specifications file
-        self.model_specs = ModelSpecifications(xml_path="/workspace/data_models/ResourceTransmission_v1.xml")
+        self.model_specs = ModelSpecifications(xml_path="/workspace/data_models/ResourceTransmission_v1.xml",
+                                               xsd_path="/workspace/data_models/format_specifications/dm_specification_schema.xsd")
 
     @property
     def URI(self):
@@ -51,7 +53,7 @@ class ModelInterpreter:
 # region Helper functions
 
     def load_model_code(self, file_name: str) -> ModuleType:
-        file_path = Path('/data/model_code') / file_name
+        file_path = Path('/workspace/data_models/model_code') / file_name
 
         if not file_path.exists():
             raise FileNotFoundError(f"{file_path} does not exist.")
@@ -82,6 +84,7 @@ class ModelInterpreter:
                     dict_name = f"objects_{name}"
                     setattr(self.loaded_module, dict_name, {})
         self.execution_scope = dict(self.loaded_module.__dict__)
+
     def resolve_class_name(self, class_name):
         if self.loaded_module is None:
             raise ModuleUnavailableError("No model code loaded.")
@@ -89,22 +92,25 @@ class ModelInterpreter:
             raise ValueError(f"Class {class_name} not recognized.")
         return getattr(self.loaded_module, class_name)
 
-    def merge_relationship_nodes(self, class_name, records):
+    def merge_relationship_nodes(self, class_name: str, records: list) -> dict:
         references = {}
 
         # Iterate over records to build the desired dictionary
         for record in records:
             # get name of relationship (reference)
-            rel_type = record["relationship_type"].lower()
+            rel_type = record.get("relationship_type", "").lower()
+            if not rel_type:
+                # record is a single node without relationships, continue
+                continue
             # get name of related class
             ref_class_name = self.model_specs.get_reference_type(class_name, rel_type)
-            # get attributes of related node
-            referred_node = dict(record["related_node_properties"])
+            # get object of related node
+            referred_node = self.get_object(ref_class_name, record["related_node_properties"]["key"], True)
 
             # Check if this relationship type indicates a list or a single object
-            expected_type = self.model_specs.get_reference_multiplicity(ref_class_name, rel_type)
+            is_multi = self.model_specs.is_multi_reference(class_name, rel_type)
             
-            if expected_type == "multi":
+            if is_multi:
                 if rel_type in references:
                     references[rel_type].append(referred_node)
                 else:
@@ -113,23 +119,124 @@ class ModelInterpreter:
                 references[rel_type] = referred_node
 
         return references
+    
+    def object_from_node(self, node, records=None, reduced=False):
+        """
+        Constructs a Python object from a Neo4j node.
 
-    def load_node(self, class_name, key, include_related=True):
+        Parameters:
+            node: The Neo4j node.
+            records (list): Optional list of related records.
+            reduced (bool): indicates whether the object is to be loaded in reduced mode
+
+        Returns:
+            The corresponding Python object.
+        """
+        class_name = node.labels[0] # TODO: Notice!
+        obj_class = self.resolve_class_name(class_name)
+        key = node['key']
+        custom_key = self.model_specs.get_key_attribute(class_name)
+        # Cache for registers
+        register_cache = {}
+        register_cache[class_name] = getattr(self.loaded_module, f"objects_{class_name}")
+        # Check if object is available in loaded context aka object register
+        obj = register_cache[class_name].get(key, None)
+        if reduced:
+            # Return object from register or instantiate object in reduced mode with just the key
+            return obj if obj else obj_class.create_reduced(key=key)
+        if obj and not obj.mini_mode:
+            return obj
+        # At this point, we need to construct the object anew
+        # Extract attributes and references from the records
+        attributes = {key: node[key] for key in node if key != "key" and key != custom_key}
+        references = {}
+        if records:
+            for record in records:
+                relationship = record.get('relationship_type', None)
+                rel_node = record.get('related_node_properties', None)
+                if not relationship or not rel_node:
+                    continue
+                rel_node_class = self.model_specs.get_reference_type(class_name, relationship)
+                rel_node_key = rel_node['key']
+                # Fetch or cache the related register
+                if rel_node_class not in register_cache:
+                    register_cache[rel_node_class] = getattr(self.loaded_module, f"objects_{rel_node_class}")
+                related_register = register_cache[rel_node_class]
+
+                # Try to get the related object from the register or create a reduced version
+                related_obj = related_register.get(rel_node_key, None)
+                if not related_obj:
+                    # If nothing was found in register, create object in reduced mode and store it in register
+                    related_class = self.resolve_class_name(rel_node_class)
+                    related_obj = related_class.create_reduced(rel_node_key)
+                    related_register[rel_node_key] = related_obj
+                
+                # Check if this relationship type indicates a list or a single object
+                is_multi = self.model_specs.is_multi_reference(class_name, relationship)
+                
+                if is_multi:
+                    if relationship in references:
+                        references[relationship].append(related_obj)
+                    else:
+                        references[relationship] = [related_obj]
+                else:
+                    references[relationship] = related_obj
+
+        return obj_class(key=key, **attributes, **references)
+    
+    def load_node(self, class_name: str, key: str, tx, include_related=True):
+        """
+        Fetches the node from the database and returns its corresponding Python object.
+
+        Parameters:
+            class_name (str): The class name of the node.
+            key (str): The key to identify the node.
+            tx: The active transaction.
+            include_related (bool): Whether to load related nodes or just the main node.
+
+        Returns:
+            The corresponding Python object or None if not found.
+        """
+        # Base query to retrieve the node
+        query = f"MATCH (n:{class_name}) WHERE n.key = $key "
+
+        # If related nodes and relationships are to be included, modify the query
+        if include_related:
+            query += """
+            OPTIONAL MATCH (n)-[r]->(related)
+            RETURN 
+                n as main_node,
+                type(r) as relationship_type, 
+                related as related_node_properties
+            """
+        try:
+            result = tx.run(query, key=key)
+            records = result.data()
+            
+            if not records:
+                return None
+
+            obj = self.object_from_node(records[0]['n'], records if include_related else None)
+            return obj
+
+        except Exception as e:
+            # TODO: Handle the error robustly
+            raise e
+
+    def load_node(self, class_name, key_value, include_related=True) -> dict :
         """
         Load a node and, optionally, its related nodes and relationships from the database.
 
         Parameters:
             class_name (str): The name of the node's class.
-            key (str): The key to identify the node.
+            key_value (str): The key to identify the node.
             include_related (bool): Whether to include related nodes and relationships in the result.
 
         Returns:
             A dictionary containing the main node's data and its related nodes' data.
         """
-        # Get the key attribute name from the target class
-        key_attribute_name = self.model_specs.get_key_attribute(class_name)
         # Base query to retrieve the node
-        query = f"MATCH (n:{class_name}) WHERE n.{key_attribute_name} = $key "
+        query = f"MATCH (n:{class_name}) WHERE n.key = $key "
 
         # If related nodes and relationships are to be included, modify the query
         if include_related:
@@ -144,7 +251,7 @@ class ModelInterpreter:
             query += "RETURN n as main_node"
 
         with self.driver.session() as session:
-            result = session.run(query, key=key)
+            result = session.run(query, key=key_value)
             records = result.data()
 
             if not records:
@@ -152,7 +259,7 @@ class ModelInterpreter:
 
             main_node_data = dict(records[0]['main_node'])
             
-            if include_related:
+            if include_related and self.model_specs.has_any_reference(class_name):
                 related_info = self.merge_relationship_nodes(class_name, records)
                 return {
                     'node': main_node_data,
@@ -163,6 +270,67 @@ class ModelInterpreter:
                     'node': main_node_data
                 }
 
+    def _construct_create_query(self, class_name, attrs, refs):
+        node_attrs = ", ".join(f"{k}: {json.dumps(v)}" for k, v in attrs.items())
+        query = [f"CREATE (a:{class_name} {{ {node_attrs} }})"]
+        expected_rel_created = 0
+
+        if refs:
+            query.append("WITH a")
+            for rel_name, rel_data in refs.items():
+                # Check if the ref data is an object or a dictionary
+                if isinstance(rel_data, dict):
+                    related_class_name = rel_data['class_name']
+                    related_key = rel_data['key']
+                else:  # It's an object
+                    related_class_name = type(rel_data).__name__
+                    related_key = rel_data.key
+
+                relationship_type = rel_name.upper()
+                inv_rel_type = self.loaded_module.INVERSE_RELATIONSHIPS.get(rel_name, "").upper()
+                query.append(f"MATCH (b_{rel_name}:{related_class_name} {{key: '{related_key}'}})")
+                query.append(f"CREATE (a)-[:{relationship_type}]->(b_{rel_name})")
+                expected_rel_created += 1
+                if inv_rel_type:
+                    query.append(f"CREATE (b_{rel_name})-[:{inv_rel_type}]->(a)")
+                    expected_rel_created += 1
+
+        return "\n".join(query), expected_rel_created
+    
+    def _construct_update_node_query(self, class_name, key, attrs):
+        set_clause = ", ".join(f"n.{attr_name} = ${attr_name}" for attr_name in attrs.keys())
+        query = f"""
+        MATCH (n:{class_name})
+        WHERE n.key = $key
+        SET {set_clause}
+        """
+        query_params = {"key": key, **attrs}
+        return query, query_params
+
+    def _construct_update_relationships_query(self, class_name, key, refs):
+        detach_queries = []
+        attach_queries = []
+        for rel_name, rel_object in refs.items():
+            relationship_type = rel_name.upper()
+            related_class_name = type(rel_object).__name__
+            inv_rel_type = self.loaded_module.INVERSE_RELATIONSHIPS.get(rel_name, "").upper()
+
+            detach_queries.append(f"""
+            MATCH (a:{class_name} {{key: '{key}'}})-[r:{relationship_type}]->(b)
+            DELETE r""")
+            if inv_rel_type:
+                detach_queries.append(f"""
+                OPTIONAL MATCH (b)-[r_inv:{inv_rel_type}]->(a) DELETE r_inv""")
+            
+            attach_queries.append(f"""
+            MATCH (a:{class_name} {{key: '{key}'}})
+            MATCH (b:{related_class_name} {{key: '{rel_object.key}'}})
+            MERGE (a)-[:{relationship_type}]->(b)""")
+            if inv_rel_type:
+                attach_queries.append(f"""
+                MERGE (b)-[:{inv_rel_type}]->(a)""")
+
+        return "\n".join(detach_queries), "\n".join(attach_queries)
 # endregion                    
 
 # region CRUD related
@@ -183,49 +351,43 @@ class ModelInterpreter:
             Object of type class_name if it exists, None otherwise
         """
         target_class = self.resolve_class_name(class_name)
+        register = getattr(self.loaded_module, f"objects_{class_name}")
 
         # Check if object is available in loaded context aka object register
-        register = getattr(self.loaded_module, f"objects_{class_name}")
         obj = register.get(key, None)
-        
-        # If object data is not provided, and it's either not in the register or in mini_mode, load data from DB
-        if not object_data and (not obj or obj.mini_mode):
-            object_data = self.load_node(class_name, key, include_related=not reduced)
-            if not object_data:
-                return None
 
-        node_data = object_data['node']
-        related_nodes_data = object_data.get('related_nodes', [])
-        relationships_data = object_data.get('relationships', [])
-        compiled_rels = self.merge_relationship_nodes(related_nodes_data, relationships_data)
-
-        # Instantiate as a reduced object
-        if not obj:
-            obj = target_class.create_reduced(key)
-
-        # If not in reduced mode, load related nodes and update the main object
-        if not reduced:
+        # if an object was found
+        if obj:
+            # check if it is in full mode
             if not obj.mini_mode:
                 return obj
-            
-            related_objects = {}
-            for rel in relationships_data:
-                rel_name = rel['type'].lower()
-                related_key = rel['end_node_id']
-                related_obj = self.get_object(rel['end_node_class'], related_key, reduced=True, object_data=related_nodes_data.get(related_key))
-                
-                if isinstance(related_objects.get(rel_name), list):
-                    related_objects[rel_name].append(related_obj)
-                else:
-                    related_objects[rel_name] = [related_obj]
+            # otherwise check if full mode is required
+            if reduced:
+                return obj
+            # at this point, obj was found, is in reduced mode, but full is required. continue as if no object was found in register and full mode required
+        else:
+            # case: object was not found in register, create a slimmed down version
+            obj = target_class.create_reduced(key)
+            if reduced:
+                # if nothing more was required, already return the object in mini_mode after storing it in the register
+                register[key] = obj
+                return obj
+        # at this point, obj is a non-full object with the correct key, but full mode is required. check if object_data is already given, otherwise get it from database
+        if not object_data:
+            object_data = self.load_node(class_name, key, include_related=not reduced) # include related nodes if full mode is required
+        if not object_data:
+            return None # if there is still no object data, then because no node exists in database, return None
 
-            # Upgrade the object using node data, attributes, and related objects
-            all_data = {**node_data, **related_objects}
-            all_data.pop(obj.key_name)
-            obj.upgrade(**all_data)
+        # object_data is now ready to be processed into a program object
+        node_data = object_data['node']
+        related_nodes = object_data.get('related', {})
+        # Upgrade the object using node data, attributes, and related objects
+        all_data = {**node_data, **related_nodes}
+        all_data.pop('key')
+        obj.upgrade(**all_data)
 
-            # Store the object in the register
-            register[key] = obj
+        # Store the object in the register
+        register[key] = obj
 
         return obj
 
@@ -241,50 +403,45 @@ class ModelInterpreter:
         Returns:
             Object of type class_name. Either a pre-existing object with the same key or the newly created object.
         """
-        # Resolve target class, key_name, and register
+        # -- Gather local variables, validate parameters, check for target object in register --
         target_class = self.resolve_class_name(class_name)
         key_name = self.model_specs.get_key_attribute(class_name)
         register = getattr(self.loaded_module, f"objects_{class_name}")
-        
-        # Check if object already exists
-        existing_object = self.get_object(class_name, args[key_name])
+
+        key_value = args.get('key', args.get(key_name))
+        if not key_value:
+            raise ValueError(f'Key attribute {key_name} not provided in arguments.')
+
+        existing_object = self.get_object(class_name, key_value)
         if existing_object:
             return existing_object
 
+        if not self.model_specs.validate_arguments(class_name, args):
+            raise ValueError(f'Invalid Constructor Arguments for class {class_name}: {str(args)}')
+
+        # -- Prepare Object creation and Database Query --
+        # Rename custom key name to 'key'
+        args['key'] = args.pop(key_name, key_value)
+
         # Instantiate the object
         obj = target_class(**args)
+        attrs, refs = self.model_specs.separate_attrs_refs(class_name, args)
 
-        # Separate attributes from references
-        attrs = {k: v for k, v in args.items() if not hasattr(v, 'key')}
-        user_refs = {k: v for k, v in args.items() if hasattr(v, 'key')}
-
-        # Prepare relationships for DB synchronization
-        relationships = {}
-        for ref_name, ref_object in user_refs.items():
-            rel_type = ref_name.upper()  # capitalized relationship name
-            rel_target_class_name = type(ref_object).__name__
-            relationships[rel_type] = {
-                'class_name': rel_target_class_name,
-                'key': ref_object.key
-            }
-
-        # Construct and run the creation query
-        node_attrs = ", ".join(f"{k}: '{v}'" for k, v in attrs.items()) #TODO: only ' if value is not numerical
-        query_create = f"CREATE (a:{class_name} {{ {node_attrs} }})"
-        if relationships:
-            query_create += f"\nWITH a"
-        for rel_name, rel_data in relationships.items():
-            relationship_type = rel_name.upper()
-            inv_rel_type = self.loaded_module.INV_REL_MAP.get(rel_name, "").upper()
-            key_attribute_name = self.model_specs.get_key_attribute(rel_data['class_name'])
-            query_create += f"\nMATCH (b_{rel_name}:{rel_data['class_name']} {{{key_attribute_name}: '{rel_data['key']}'}})"
-            query_create += f"\nCREATE (a)-[:{relationship_type}]->(b_{rel_name})"
-            if inv_rel_type:
-                query_create += f"\nCREATE (b_{rel_name})-[:{inv_rel_type}]->(a)"
+        # Construct the creation query
+        query_create, expected_rel_created = self._construct_create_query(class_name, attrs, refs)
         
+        # -- Run Query on Database and handle results --
         with self.driver.session() as session:
-            session.run(query_create)
-        # TODO: validate result
+            tx = session.begin_transaction()
+            try:
+                counters = tx.run(query_create).consume().counters
+                if (counters.nodes_created != 1) or (counters.relationships_created != expected_rel_created):
+                    raise ValueError(f"Error creating node or relationships in Neo4j. Expected 1 node and {expected_rel_created} relationships but got {counters.nodes_created} nodes and {counters.relationships_created} relationships.")
+                tx.commit()
+            except:
+                tx.rollback()
+                raise
+            
         # Store the object in the register
         register[obj.key] = obj
 
@@ -303,79 +460,121 @@ class ModelInterpreter:
         Returns:
             The updated object or an appropriate result/error message.
         """
-        # 1. Object Lookup
+        # 1. Preparations
+        # Object Lookup
         obj = self.get_object(class_name, key)
         if not obj:
             raise ValueError(f"No object of type {class_name} with key {key} found.")
-
-        # Separate attributes and relationships
-        attributes = {k: v for k, v in args.items() if not hasattr(v, 'key')}
-        relationships = {k: v for k, v in args.items() if hasattr(v, 'key')}
-
-        # 2. Update Database Node
-        # Construct the Cypher query to update attributes
-        set_clause = ", ".join(f"n.{attr_name} = $value_{attr_name}" for attr_name in attributes.keys())
-        query = f"""
-        MATCH (n:{class_name})
-        WHERE n.{obj.key_name} = $key
-        SET {set_clause}
-        """
-        query_params = {"key": key}
-        query_params.update({f"value_{attr_name}": value for attr_name, value in attributes.items()})
+        # Check if trying to update the key
+        key_name = self.model_specs.get_key_attribute(class_name)
+        if key_name in args or 'key' in args:
+            raise ValueError("Updating the object's key is not allowed.")
+        # Validate arguments
+        if not self.model_specs.validate_arguments(class_name, args, strict=False):
+            raise ValueError(f'Invalid Update Arguments for class {class_name}: {str(args)}')
+        # Separate attributes from references and prepare queries
+        attrs, refs = self.model_specs.separate_attrs_refs(class_name, args)
+        query, query_params = self._construct_update_node_query(class_name, key, attrs)
+        detach_query, attach_query = self._construct_update_relationships_query(class_name, key, refs)
 
         with self.driver.session() as session:
-            result = session.run(query, query_params)
-            # Check the result of the query
-            if not result.single():
-                raise RuntimeError(f"Failed to update attributes of node type {class_name} with key {key}.")
-
-        # Update relationships
-        for rel_name, rel_object in relationships.items():
-            relationship_type = rel_name.upper()
-            related_class_name = type(rel_object).__name__
-            key_attribute_name = self.model_specs.get_key_attribute(related_class_name)
-            related_key_value = rel_object.key
-            inv_rel_type = self.loaded_module.INV_REL_MAP.get(rel_name, "").upper()
-
-            # Detach old relationship
-            query_detach = f"""
-            MATCH (a:{class_name} {{{obj.key_name}: '{key}'}})-[r:{relationship_type}]->(b)
-            DELETE r"""
-            if inv_rel_type:
-                query_detach += f"""
-                OPTIONAL MATCH (b)-[r_inv:{inv_rel_type}]->(a) DELETE r_inv"""
-            
-            # Create new relationship and its inverse if defined
-            query_relationship = f"""
-            MATCH (a:{class_name} {{{obj.key_name}: '{key}'}})
-            MATCH (b:{related_class_name} {{{key_attribute_name}: '{related_key_value}'}})
-            MERGE (a)-[:{relationship_type}]->(b)"""
-            if inv_rel_type:
-                query_relationship += f"""
-                MERGE (b)-[:{inv_rel_type}]->(a)"""
-            
-            with self.driver.session() as session:
-                session.run(query_detach)
-                session.run(query_relationship)
+            tx = session.begin_transaction()
+            try:
+                # 2. Update Database
+                tx.run(query, query_params)
+                tx.run(detach_query)
+                tx.run(attach_query)
+                
+                tx.commit()
+            except Exception as e:
+                tx.rollback()
+                raise RuntimeError(f"Failed to update object of type {class_name} with key {key}. Reason: {str(e)}")
 
         # 3. Update Python Object
         # Update attributes
-        for attr_name, value in attributes.items():
+        for attr_name, value in attrs.items():
             setattr(obj, attr_name, value)
         # Update relationships
-        for rel_name, rel_object in relationships.items():
+        for rel_name, rel_object in refs.items():
             setattr(obj, rel_name, rel_object)
 
         # 4. Return the updated object
         return obj
 
+    def delete_object(self, class_name: str, key: str):
+        """
+        Deletes an existing object of type class_name identified by the key.
+        Deletes both the object's representation in the program and in the database.
 
-    # TODO: 
-    # create_multiple_objects
+        Parameters:
+            class_name (str): The name of the object class.
+            key (str): The key to identify the object.
+        
+        Returns:
+            str: A success or error message.
+        """
+
+        # 1. Object Lookup
+        obj = self.get_object(class_name, key)
+        if not obj:
+            raise ValueError(f"No object of type {class_name} with key {key} found.")
+        
+        # 2. Generate Query to Detach Relationships and Delete Node
+        query = f"""
+        MATCH (n:{class_name} {{key: $key}})
+        DETACH DELETE n
+        """
+        
+        # 3. Execute Query and Check Result
+        with self.driver.session() as session:
+            result = session.run(query, {"key": key})
+            counters = result.consume().counters  # Get the counters
+            if counters.nodes_deleted != 1:
+                raise RuntimeError(f"Failed to delete object of type {class_name} with key {key}.")
+        
+        # 4. Delete from Register
+        register = getattr(self.loaded_module, f"objects_{class_name}")
+        register.pop(key, None)  # Deletes the object if exists, otherwise does nothing
+        
+        return f"Object of type {class_name} with key {key} successfully deleted."
+
+    def clone_object(self, class_name: str, key: str, new_key: str):
+        # Check if source object exists
+        src_object = self.get_object(class_name, key)
+        if not src_object:
+            raise ValueError(f"No object of type {class_name} with key {key} found.")
+
+        # Check for collision with new_key
+        if self.get_object(class_name, new_key):
+            raise ValueError(f"An object of type {class_name} with key {new_key} already exists.")
+
+        # Extract the attributes and references from the source object
+        class_info = self.model_specs.classes.get(class_name)
+        attributes = [attr for attr, _ in class_info['attributes'].items() if attr != class_info['key']]
+        references = [ref for ref, _ in class_info['references'].items()]
+
+        args = {}
+        for attr in attributes:
+            value = getattr(src_object, attr)
+            if value is not None:
+                args[attr] = value
+        for ref in references:
+            value = getattr(src_object, ref)
+            if value is not None:
+                args[ref] = value
+
+        # Update the key
+        args['key'] = new_key
+
+        # Create the new object using the existing functionality
+        cloned_obj = self.create_object(class_name, args)
+
+        return cloned_obj
+    
+    # TODO:
     # get_multiple_objects
-    # update_object
+    # create_multiple_objects
     # update_multiple_objects
-    # delete_object
     # delete_multiple_objects
 
 # endregion
@@ -402,7 +601,7 @@ class ModelInterpreter:
                 # Otherwise, assume it's an expression and use eval
                 result = eval(input, self.execution_scope)
         except Exception as e:
-            result = str(e)
+            result = e
 
         # Reset the standard output
         sys.stdout = sys.__stdout__

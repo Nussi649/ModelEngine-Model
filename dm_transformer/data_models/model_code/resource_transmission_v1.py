@@ -109,7 +109,7 @@ class Value:
         return self._identifier
 
     def __str__(self):
-        return f'(Value) {self.value} {self.unit.name}'
+        return f'(Value) {self.key}'
 
 
 class Resource:

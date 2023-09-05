@@ -5,3 +5,4 @@ neo4j-python-migrations
 python-dotenv
 black
 multidict
+lxml

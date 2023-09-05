@@ -1,0 +1,64 @@
+
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+
+    <!-- Root Element -->
+    <xs:element name="Classes">
+        <xs:complexType>
+            <xs:sequence>
+                <xs:element name="Class" maxOccurs="unbounded">
+                    <xs:complexType>
+                        <xs:sequence>
+                            <xs:element name="Collection" type="xs:string" minOccurs="0" maxOccurs="1"/>
+                            <xs:element name="Attribute" minOccurs="0" maxOccurs="unbounded">
+                                <xs:complexType>
+                                    <xs:simpleContent>
+                                        <xs:extension base="xs:string">
+                                            <xs:attribute name="type" type="dataType" use="required"/>
+                                            <xs:attribute name="is_key" type="xs:boolean" use="optional"/>
+                                            <xs:attribute name="required" type="xs:boolean" use="required"/>
+                                        </xs:extension>
+                                    </xs:simpleContent>
+                                </xs:complexType>
+                            </xs:element>
+                            <xs:element name="Reference" minOccurs="0" maxOccurs="unbounded">
+                                <xs:complexType>
+                                    <xs:simpleContent>
+                                        <xs:extension base="xs:string">
+                                            <xs:attribute name="type" type="xs:string" use="required"/>
+                                            <xs:attribute name="multiplicity" type="multiplicityType" use="required"/>
+                                            <xs:attribute name="required" type="xs:boolean" use="required"/>
+                                            <xs:attribute name="inverse" type="xs:string" use="optional"/>
+                                        </xs:extension>
+                                    </xs:simpleContent>
+                                </xs:complexType>
+                            </xs:element>
+                        </xs:sequence>
+                        <xs:attribute name="name" type="xs:string" use="required"/>
+                        <xs:attribute name="is_abstract" type="xs:boolean" use="optional"/>
+                        <xs:attribute name="extends" type="xs:string" use="optional"/>
+                    </xs:complexType>
+                </xs:element>
+            </xs:sequence>
+        </xs:complexType>
+    </xs:element>
+
+    <!-- Enum for data type -->
+    <xs:simpleType name="dataType">
+        <xs:restriction base="xs:string">
+            <xs:enumeration value="text"/>
+            <xs:enumeration value="int"/>
+            <xs:enumeration value="float"/>
+            <xs:enumeration value="datetime"/>
+            <xs:enumeration value="pos_geo"/>
+        </xs:restriction>
+    </xs:simpleType>
+
+    <!-- Enum for multiplicity -->
+    <xs:simpleType name="multiplicityType">
+        <xs:restriction base="xs:string">
+            <xs:enumeration value="mono"/>
+            <xs:enumeration value="multi"/>
+        </xs:restriction>
+    </xs:simpleType>
+
+</xs:schema>

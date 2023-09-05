@@ -1,15 +1,13 @@
 import os
-import re
-import traceback
-from xml.etree.ElementTree import Element, fromstring
-from validation import validate_class_definition
+from dm_specs import ModelSpecifications
 from code_generation import generate_class_code
 
 
 import_statements = [
-    "from typing import List",
+    "from typing import List, Optional, Union",
     "from abc import ABC",
-    "from datetime import datetime"
+    "from datetime import datetime",
+    "from model_entity import ModelEntity"
 ]
 
 # region Additional Helper Functions for XML Parsing
@@ -17,24 +15,6 @@ import_statements = [
 def read_xml_file(file_path):
     with open(file_path, 'r', encoding='utf-8') as file:
         return file.read().strip()
-
-def split_into_class_blocks(xml_content):
-    class_definitions = xml_content.split('</Class>')
-    class_definitions = [class_def.strip() + '</Class>' for class_def in class_definitions if class_def.strip()]
-    return class_definitions
-
-def remove_whitespace_between_tags(xml_content: str) -> str:
-    return re.sub(r'>\s*<', '><', xml_content)
-
-def get_reference_maps(class_info: Element) -> dict:
-    reference_maps = {}
-    for ref in class_info.findall('Reference'):
-        inv_name = ref.attrib.get("inverse")
-        if inv_name is not None:
-            reference_name = ref.text
-            reference_maps[reference_name] = inv_name
-
-    return reference_maps
 
 # endregion
 
@@ -50,54 +30,31 @@ def process_file(input_path: str, output_path: str):
         print("Error: Invalid input file path or file type. Please provide a valid XML file.")
         return
 
-    # Read XML content from input file
-    xml_content = remove_whitespace_between_tags(read_xml_file(input_path))
+    # Use ModelSpecifications for parsing and validation
+    model_specs = ModelSpecifications(xml_path=input_path)
 
-    # Split into class blocks
-    class_blocks = split_into_class_blocks(xml_content)
+    # Collect Relationship Inverses
+    relationship_inverses = {}
+    for _, class_details in model_specs.classes.items():
+        for ref_name, ref_details in class_details.get("references", {}).items():
+            inv = ref_details.get("inverse")
+            if inv is not None:
+                relationship_inverses[ref_name] = inv
 
-    # Collect declared classes for validation context
-    declared_classes = []
-    for class_block in class_blocks:
-        try:
-            declared_classes.append(fromstring(class_block))
-        except Exception as e:
-            print(f"Error: Invalid class definition encountered at:\n\n{class_block}\n\nError message: {str(e)}")
-            traceback.print_exc()
-
-
-    # Validate class definitions and parse
-    validated_classes = []
-    validated_references = {}
-    for class_info in declared_classes:
-        try:
-            if validate_class_definition(class_info, declared_classes):
-                validated_classes.append(class_info)
-                # Get the reference maps for this class
-                reference_maps = get_reference_maps(class_info)
-                
-                # Update the unified dictionary with the reference maps, checking for duplicates
-                for key, value in reference_maps.items():
-                    if key in validated_references:
-                        raise ValueError(f"Duplicate reference key '{key}' encountered in class {class_info.attrib.get('name')}.")
-                    validated_references[key] = value
-        except Exception as e:
-            print(f"Error: Invalid class definition encountered at Class {class_info.attrib.get('name')}.\nError message: {str(e)}")
-            traceback.print_exc()
-
-    # Convert the validated_references dictionary to a Python code string
-    inv_rel_map_code = "INV_REL_MAP = {\n" + ",\n".join([f"    '{k}': '{v}'" for k, v in validated_references.items()]) + "\n}"
-
-    # Generate Import statement block
+    # Generate Static Code Blocks
     import_block = "\n".join(import_statements)
-
-    # Generate Python classes code
+    inv_rel_map_code = "INVERSE_RELATIONSHIPS = {\n" + ",\n".join([f"    '{k}': '{v}'" for k, v in relationship_inverses.items()]) + "\n}"
     generated_python_code = [
         import_block,
-        invalid_usage_block,
-        inv_rel_map_code  # Include the INV_REL_MAP code string
+        inv_rel_map_code,  # Include the INV_REL_MAP code string
+        "register = {}"
     ]
-    generated_python_code.extend([generate_class_code(class_info) for class_info in validated_classes])
+
+    # Iterate through all classes and generate corresponding code
+    for class_name, class_details in model_specs.classes.items():
+        generated_python_code.append(generate_class_code(class_name, class_details))
+
+    # Concatenate code lines
     final_code = "\n\n".join(generated_python_code)
 
     # Validate output file path (optional)
@@ -115,7 +72,7 @@ def process_file(input_path: str, output_path: str):
 if __name__ == "__main__":
     #script_directory = os.path.dirname(os.path.abspath(__file__))
     #in_path = os.path.join(script_directory, "datamodels", "ResourceTransmission_v1.xml")
-    in_path = "dm_transformer/datamodels/ResourceTransmission_v1.xml"
-    out_path = "model_code/resource_transmission_v1.py"
+    in_path = "data_models/ResourceTransmission_v1.xml"
+    out_path = "../model_code/test.py"
 
     process_file(in_path, out_path)

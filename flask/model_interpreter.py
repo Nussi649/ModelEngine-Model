@@ -7,8 +7,9 @@ from abc import ABC
 from neo4j import GraphDatabase
 from types import ModuleType
 from pathlib import Path
+from collections import defaultdict
 from dm_specs import ModelSpecifications
-from typing import Iterable, get_args, get_type_hints
+from typing import List, Tuple, Any, Iterable, get_args, get_type_hints
 
 create_object_query = "CREATE (n:{class_name}) SET n = $attributes"
 get_object_query = """
@@ -74,15 +75,15 @@ class ModelInterpreter:
     
     def init_module(self, module: ModuleType):
         self.loaded_module = module
-        # Iterate through all the attributes of the loaded module
-        for name, obj in inspect.getmembers(self.loaded_module):
-            # Check if the object is a class
-            if inspect.isclass(obj):
-                # Check if the class is not abstract
-                if not issubclass(obj, ABC):
-                    # Create a dictionary with the desired name
-                    dict_name = f"objects_{name}"
-                    setattr(self.loaded_module, dict_name, {})
+        ## Iterate through all the attributes of the loaded module
+        #for name, obj in inspect.getmembers(self.loaded_module):
+        #    # Check if the object is a class
+        #    if inspect.isclass(obj):
+        #        # Check if the class is not abstract
+        #        if not issubclass(obj, ABC):
+        #            # Create a dictionary with the desired name
+        #            dict_name = f"objects_{name}"
+        #            setattr(self.loaded_module, dict_name, {})
         self.execution_scope = dict(self.loaded_module.__dict__)
 
     def resolve_class_name(self, class_name):
@@ -91,100 +92,60 @@ class ModelInterpreter:
         if class_name not in self.model_specs.classes:
             raise ValueError(f"Class {class_name} not recognized.")
         return getattr(self.loaded_module, class_name)
-
-    def merge_relationship_nodes(self, class_name: str, records: list) -> dict:
-        references = {}
-
-        # Iterate over records to build the desired dictionary
-        for record in records:
-            # get name of relationship (reference)
-            rel_type = record.get("relationship_type", "").lower()
-            if not rel_type:
-                # record is a single node without relationships, continue
-                continue
-            # get name of related class
-            ref_class_name = self.model_specs.get_reference_type(class_name, rel_type)
-            # get object of related node
-            referred_node = self.get_object(ref_class_name, record["related_node_properties"]["key"], True)
-
-            # Check if this relationship type indicates a list or a single object
-            is_multi = self.model_specs.is_multi_reference(class_name, rel_type)
-            
-            if is_multi:
-                if rel_type in references:
-                    references[rel_type].append(referred_node)
-                else:
-                    references[rel_type] = [referred_node]
-            else:
-                references[rel_type] = referred_node
-
-        return references
     
-    def object_from_node(self, node, records=None, reduced=False):
+    def get_register(self, class_name: str):
+        general_register = getattr(self.loaded_module, "register")
+        register = general_register.get(class_name, None)
+        if not register:
+            general_register[class_name] = {}
+            register = general_register[class_name]
+        return register
+    
+    def object_from_node(self, node, records=None, reduced_object=None):
         """
-        Constructs a Python object from a Neo4j node.
+        Constructs a full Python object from a Neo4j node.
 
         Parameters:
             node: The Neo4j node.
             records (list): Optional list of related records.
-            reduced (bool): indicates whether the object is to be loaded in reduced mode
+            reduced_object (ModelEntity): Optional reduced object that can be upgraded to full object representation
 
         Returns:
             The corresponding Python object.
         """
-        class_name = node.labels[0] # TODO: Notice!
-        obj_class = self.resolve_class_name(class_name)
+        if reduced_object:
+            obj_class = type(reduced_object)
+            class_name = obj_class.__name__
+        else:
+            all_classes = set(self.model_specs.get_class_names())
+            class_name = next((label for label in node.labels if label in all_classes), None)
+            if not class_name:
+                raise ValueError("No valid class name found in node labels.")
+            obj_class = self.resolve_class_name(class_name)
         key = node['key']
         custom_key = self.model_specs.get_key_attribute(class_name)
-        # Cache for registers
-        register_cache = {}
-        register_cache[class_name] = getattr(self.loaded_module, f"objects_{class_name}")
-        # Check if object is available in loaded context aka object register
-        obj = register_cache[class_name].get(key, None)
-        if reduced:
-            # Return object from register or instantiate object in reduced mode with just the key
-            return obj if obj else obj_class.create_reduced(key=key)
-        if obj and not obj.mini_mode:
-            return obj
-        # At this point, we need to construct the object anew
+
+        register = self.get_register(class_name)
+        obj = register.get(key, None)
+        if reduced_object and obj:
+            assert reduced_object == obj, f"Found two different objects for class {class_name} with key {key}. This should not happen."
+        if obj:
+            reduced_object = obj
         # Extract attributes and references from the records
         attributes = {key: node[key] for key in node if key != "key" and key != custom_key}
-        references = {}
-        if records:
-            for record in records:
-                relationship = record.get('relationship_type', None)
-                rel_node = record.get('related_node_properties', None)
-                if not relationship or not rel_node:
-                    continue
-                rel_node_class = self.model_specs.get_reference_type(class_name, relationship)
-                rel_node_key = rel_node['key']
-                # Fetch or cache the related register
-                if rel_node_class not in register_cache:
-                    register_cache[rel_node_class] = getattr(self.loaded_module, f"objects_{rel_node_class}")
-                related_register = register_cache[rel_node_class]
+        references = self._fetch_references_from_records(class_name, records) if records else {}
 
-                # Try to get the related object from the register or create a reduced version
-                related_obj = related_register.get(rel_node_key, None)
-                if not related_obj:
-                    # If nothing was found in register, create object in reduced mode and store it in register
-                    related_class = self.resolve_class_name(rel_node_class)
-                    related_obj = related_class.create_reduced(rel_node_key)
-                    related_register[rel_node_key] = related_obj
-                
-                # Check if this relationship type indicates a list or a single object
-                is_multi = self.model_specs.is_multi_reference(class_name, relationship)
-                
-                if is_multi:
-                    if relationship in references:
-                        references[relationship].append(related_obj)
-                    else:
-                        references[relationship] = [related_obj]
-                else:
-                    references[relationship] = related_obj
-
-        return obj_class(key=key, **attributes, **references)
+        if reduced_object:
+            if not reduced_object.mini_mode:
+                reduced_object._mini_mode = True
+            reduced_object.upgrade(**attributes, **references)
+            register[key] = reduced_object
+            return reduced_object
+        new_obj = obj_class(key=key, **attributes, **references)
+        register[key] = new_obj
+        return new_obj
     
-    def load_node(self, class_name: str, key: str, tx, include_related=True):
+    def load_node(self, class_name: str, key: str, tx, include_related=True, reduced_object=None):
         """
         Fetches the node from the database and returns its corresponding Python object.
 
@@ -216,59 +177,40 @@ class ModelInterpreter:
             if not records:
                 return None
 
-            obj = self.object_from_node(records[0]['n'], records if include_related else None)
+            obj = self.object_from_node(records[0]['n'], records if include_related else None, reduced_object)
             return obj
 
         except Exception as e:
             # TODO: Handle the error robustly
             raise e
+        
+    
+    def _fetch_references_from_records(self, class_name, records):
+        references = {}
+        register_cache = {}  # Cache for object registers
 
-    def load_node(self, class_name, key_value, include_related=True) -> dict :
-        """
-        Load a node and, optionally, its related nodes and relationships from the database.
-
-        Parameters:
-            class_name (str): The name of the node's class.
-            key_value (str): The key to identify the node.
-            include_related (bool): Whether to include related nodes and relationships in the result.
-
-        Returns:
-            A dictionary containing the main node's data and its related nodes' data.
-        """
-        # Base query to retrieve the node
-        query = f"MATCH (n:{class_name}) WHERE n.key = $key "
-
-        # If related nodes and relationships are to be included, modify the query
-        if include_related:
-            query += """
-            OPTIONAL MATCH (n)-[r]->(related)
-            RETURN 
-                n as main_node,
-                type(r) as relationship_type, 
-                related as related_node_properties
-            """
-        else:
-            query += "RETURN n as main_node"
-
-        with self.driver.session() as session:
-            result = session.run(query, key=key_value)
-            records = result.data()
-
-            if not records:
-                return None
-
-            main_node_data = dict(records[0]['main_node'])
+        for record in records:
+            relationship = record.get('relationship_type')
+            rel_node = record.get('related_node_properties')
+            if not relationship or not rel_node:
+                continue
             
-            if include_related and self.model_specs.has_any_reference(class_name):
-                related_info = self.merge_relationship_nodes(class_name, records)
-                return {
-                    'node': main_node_data,
-                    'related': related_info
-                }
+            rel_class_name = self.model_specs.get_reference_type(class_name, relationship)
+            if rel_class_name not in register_cache:
+                register_cache[rel_class_name] = self.get_register(rel_class_name)
+            
+            related_obj = register_cache[rel_class_name].get(rel_node['key'])
+            if not related_obj:
+                related_class = self.resolve_class_name(rel_class_name)
+                related_obj = related_class.create_reduced(rel_node['key'])
+                register_cache[rel_class_name][rel_node['key']] = related_obj
+            
+            if self.model_specs.is_multi_reference(class_name, relationship):
+                references.setdefault(relationship, []).append(related_obj)
             else:
-                return {
-                    'node': main_node_data
-                }
+                references[relationship] = related_obj
+
+        return references
 
     def _construct_create_query(self, class_name, attrs, refs):
         node_attrs = ", ".join(f"{k}: {json.dumps(v)}" for k, v in attrs.items())
@@ -351,47 +293,117 @@ class ModelInterpreter:
             Object of type class_name if it exists, None otherwise
         """
         target_class = self.resolve_class_name(class_name)
-        register = getattr(self.loaded_module, f"objects_{class_name}")
+        register = self.get_register(class_name)
 
         # Check if object is available in loaded context aka object register
         obj = register.get(key, None)
 
-        # if an object was found
-        if obj:
-            # check if it is in full mode
-            if not obj.mini_mode:
-                return obj
-            # otherwise check if full mode is required
-            if reduced:
-                return obj
-            # at this point, obj was found, is in reduced mode, but full is required. continue as if no object was found in register and full mode required
-        else:
-            # case: object was not found in register, create a slimmed down version
-            obj = target_class.create_reduced(key)
-            if reduced:
-                # if nothing more was required, already return the object in mini_mode after storing it in the register
-                register[key] = obj
-                return obj
-        # at this point, obj is a non-full object with the correct key, but full mode is required. check if object_data is already given, otherwise get it from database
-        if not object_data:
-            object_data = self.load_node(class_name, key, include_related=not reduced) # include related nodes if full mode is required
-        if not object_data:
-            return None # if there is still no object data, then because no node exists in database, return None
-
-        # object_data is now ready to be processed into a program object
-        node_data = object_data['node']
-        related_nodes = object_data.get('related', {})
-        # Upgrade the object using node data, attributes, and related objects
-        all_data = {**node_data, **related_nodes}
-        all_data.pop('key')
-        obj.upgrade(**all_data)
-
-        # Store the object in the register
-        register[key] = obj
-
+        # If an object was found and it's in full mode or only reduced mode is required
+        if obj and (not obj.mini_mode or reduced):
+            return obj
+        # Fetch the object data from the database because we have nothing loaded and need to know, if the object even exists
+        with self.driver.session() as session:
+            tx = session.begin_transaction()
+            obj = self.load_node(class_name, key, tx, not reduced)
+            tx.commit()
         return obj
 
-    def create_object(self, class_name: str, args: dict):
+    def get_multiple_objects(self, class_key_pairs: List[Tuple[str, str]], reduced=False) -> List[Any]:
+        """
+        Retrieves multiple objects based on a list of class and key pairs.
+
+        Parameters:
+            class_key_pairs (list): A list of tuples, each containing a class name and key.
+            reduced (bool): Whether to load the objects in mini_mode or fully.
+
+        Returns:
+            list: A list of objects corresponding to the class and key pairs.
+        """
+        objects = []
+        # Group by class_name for more efficient querying
+        grouped_pairs = defaultdict(list)
+        for class_name, key in class_key_pairs:
+            grouped_pairs[class_name].append(key)
+
+        with self.driver.session() as session:
+            for class_name, keys in grouped_pairs.items():
+                for key in keys:
+                    # First, try to get the object without hitting the database
+                    obj = self.get_object(class_name, key, reduced=True)
+                    if not obj or (obj.mini_mode and not reduced):
+                        tx = session.begin_transaction()
+                        obj = self.load_node(class_name, key, tx, reduced_object=obj, include_related=not reduced)
+                        tx.commit()
+                    objects.append(obj)
+
+        return objects
+    
+    def find_object(self, class_name, args, reduced=False): # TODO: Test
+        """
+        Finds objects of type class_name based on provided properties.
+        
+        Parameters:
+            class_name (str): The class name of the objects to find.
+            args (dict): Dictionary of properties and references to use for filtering.
+            reduced (bool): Whether to load the object in reduced mode or fully.
+            
+        Returns:
+            List of objects matching the criteria.
+        """
+        # Validate args
+        valid_attributes = self.model_specs.get_attributes(class_name)
+        valid_references = self.model_specs.get_references(class_name)
+        property_filters = []
+        relationship_filters = []
+
+        for key, value in args.items():
+            if key in valid_attributes:
+                property_filters.append(f"n.{key} = ${key}")
+            elif key in valid_references:
+                if isinstance(value, str):  # If value is a key string
+                    relationship_key = value
+                else:  # If value is an object
+                    relationship_key = value.key
+                related_class = self.model_specs.get_reference_type(class_name, key)
+                relationship_name = key.upper()
+                relationship_filters.append(f"(n)-[:{relationship_name}]->(:{related_class} {{key: '{relationship_key}'}})")
+
+        # Construct the Cypher query
+        filters = property_filters + relationship_filters
+        query_filter = " AND ".join(filters)
+        query = f"""
+        MATCH (n:{class_name})
+        WHERE {query_filter}
+        RETURN n
+        """
+
+        nodes_to_process = []
+
+        with self.driver.session() as session:
+            tx = session.begin_transaction()
+            results = tx.run(query, args)
+            
+            # Gather nodes to process outside the session
+            nodes_to_process = [record['n'] for record in results]
+            objects_found = []
+
+            for node in nodes_to_process:
+                key = node['key']
+                register = self.get_register(class_name)
+                obj = register.get(key, None)
+
+                # Check register and handle object
+                if not obj or (obj and obj.mini_mode and not reduced):
+                    obj = self.load_node(class_name, key, tx, include_related=True, reduced_object=obj)
+                elif reduced and not obj:
+                    obj = self.object_from_node(node, reduced=True)
+                
+                objects_found.append(obj)
+            tx.commit()
+        
+        return objects_found
+
+    def create_object(self, class_name: str, args: dict, tx=None): # TODO: Test
         """
         Creates a new object of type class_name. If an object with the same key already exists, returns that object.
         Otherwise, creates a new one according to the provided parameters.
@@ -399,6 +411,7 @@ class ModelInterpreter:
         Parameters:
             class_name (str): name of the object class.
             args (dict): dictionary of constructor parameters.
+            tx: Optional transaction to run the database query.
 
         Returns:
             Object of type class_name. Either a pre-existing object with the same key or the newly created object.
@@ -406,7 +419,7 @@ class ModelInterpreter:
         # -- Gather local variables, validate parameters, check for target object in register --
         target_class = self.resolve_class_name(class_name)
         key_name = self.model_specs.get_key_attribute(class_name)
-        register = getattr(self.loaded_module, f"objects_{class_name}")
+        register = self.get_register(class_name)
 
         key_value = args.get('key', args.get(key_name))
         if not key_value:
@@ -431,21 +444,48 @@ class ModelInterpreter:
         query_create, expected_rel_created = self._construct_create_query(class_name, attrs, refs)
         
         # -- Run Query on Database and handle results --
-        with self.driver.session() as session:
-            tx = session.begin_transaction()
-            try:
-                counters = tx.run(query_create).consume().counters
-                if (counters.nodes_created != 1) or (counters.relationships_created != expected_rel_created):
-                    raise ValueError(f"Error creating node or relationships in Neo4j. Expected 1 node and {expected_rel_created} relationships but got {counters.nodes_created} nodes and {counters.relationships_created} relationships.")
-                tx.commit()
-            except:
-                tx.rollback()
-                raise
-            
+        # Execute the query and handle results
+        def execute_query(transaction):
+            counters = transaction.run(query_create).consume().counters
+            if (counters.nodes_created != 1) or (counters.relationships_created != expected_rel_created):
+                raise ValueError(f"Error creating node or relationships in Neo4j. Expected 1 node and {expected_rel_created} relationships but got {counters.nodes_created} nodes and {counters.relationships_created} relationships.")
+
+        if tx:
+            execute_query(tx)
+        else:
+            with self.driver.session() as session:
+                session.write_transaction(execute_query)
+                
         # Store the object in the register
         register[obj.key] = obj
 
         return obj
+    
+    def create_multiple_objects(self, objects_to_create: List[Tuple[str, dict]]): # TODO: Test
+        """
+        Creates multiple new objects. If an object with the same key already exists, returns that object.
+        Otherwise, creates a new one according to the provided parameters.
+
+        Parameters:
+            objects_to_create (list): List of tuples. Each tuple consists of class_name (str) and args (dict).
+
+        Returns:
+            List of objects created or fetched.
+        """
+        created_objects = []
+
+        with self.driver.session() as session:
+            tx = session.begin_transaction()
+            try:
+                for class_name, args in objects_to_create:
+                    obj = self.create_object(class_name, args, tx=tx)
+                    created_objects.append(obj)
+                tx.commit()
+            except:
+                tx.rollback()
+                raise
+
+        return created_objects
 
     def update_object(self, class_name: str, key: str, args: dict):
         """
@@ -501,7 +541,7 @@ class ModelInterpreter:
         # 4. Return the updated object
         return obj
 
-    def delete_object(self, class_name: str, key: str):
+    def delete_object(self, class_name: str, key: str, tx=None): # TODO: Test
         """
         Deletes an existing object of type class_name identified by the key.
         Deletes both the object's representation in the program and in the database.
@@ -509,6 +549,7 @@ class ModelInterpreter:
         Parameters:
             class_name (str): The name of the object class.
             key (str): The key to identify the object.
+            tx (Transaction, optional): An optional Neo4j transaction. If not provided, a new session and transaction will be started.
         
         Returns:
             str: A success or error message.
@@ -526,17 +567,47 @@ class ModelInterpreter:
         """
         
         # 3. Execute Query and Check Result
-        with self.driver.session() as session:
-            result = session.run(query, {"key": key})
-            counters = result.consume().counters  # Get the counters
-            if counters.nodes_deleted != 1:
-                raise RuntimeError(f"Failed to delete object of type {class_name} with key {key}.")
+        if tx:
+            result = tx.run(query, {"key": key})
+        else:
+            with self.driver.session() as session:
+                result = session.run(query, {"key": key})
+
+        counters = result.consume().counters  # Get the counters
+        if counters.nodes_deleted != 1:
+            raise RuntimeError(f"Failed to delete object of type {class_name} with key {key}.")
         
         # 4. Delete from Register
-        register = getattr(self.loaded_module, f"objects_{class_name}")
+        register = self.get_register(class_name)
         register.pop(key, None)  # Deletes the object if exists, otherwise does nothing
         
         return f"Object of type {class_name} with key {key} successfully deleted."
+    
+    def delete_multiple_objects(self, objects_to_delete: List[Tuple[str, str]]): # TODO: Test
+        """
+        Deletes multiple existing objects. Each object is identified by its class_name and key.
+        Deletes both the object's representation in the program and in the database.
+
+        Parameters:
+            objects_to_delete (list): List of tuples. Each tuple consists of class_name (str) and key (str).
+
+        Returns:
+            List of success or error messages for each deleted object.
+        """
+        messages = []
+
+        with self.driver.session() as session:
+            tx = session.begin_transaction()
+            try:
+                for class_name, key in objects_to_delete:
+                    message = self.delete_object(class_name, key, tx=tx)
+                    messages.append(message)
+                tx.commit()
+            except:
+                tx.rollback()
+                raise
+
+        return messages
 
     def clone_object(self, class_name: str, key: str, new_key: str):
         # Check if source object exists
@@ -570,15 +641,8 @@ class ModelInterpreter:
         cloned_obj = self.create_object(class_name, args)
 
         return cloned_obj
-    
-    # TODO:
-    # get_multiple_objects
-    # create_multiple_objects
-    # update_multiple_objects
-    # delete_multiple_objects
 
 # endregion
-
 
     def process_request(self, input: str):
         # get execution scope

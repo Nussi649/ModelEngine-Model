@@ -11,6 +11,8 @@ INVERSE_RELATIONSHIPS = {
     'target': 'conduits_in'
 }
 
+register = {}
+
 class ModelObject(ABC):
 
     active_from: datetime
@@ -67,9 +69,6 @@ class Value(ModelEntity):
                 value: float=None,
                 unit: 'Unit'=None,
                 used_in: 'ModelObject'=None):
-        # Abort if object is already in full mode
-        if not self._mini_mode:
-            return False
         if value is None:
             raise ValueError('Attribute value is required for upgrade')
         self.value = value if value is not None else getattr(self, 'value', None)
@@ -106,9 +105,6 @@ class Resource(ModelEntity):
 
     def upgrade(self,
                 unit_default: 'Unit'=None):
-        # Abort if object is already in full mode
-        if not self._mini_mode:
-            return False
         if unit_default is None:
             raise ValueError('Reference unit_default is required for upgrade')
         self.unit_default = unit_default if unit_default is not None else getattr(self, 'unit_default', None)
@@ -144,9 +140,6 @@ class Region(ModelEntity, ModelObject):
                 osm_id: int=None,
                 direct_constituents: List['Region']=None,
                 parents: List['Region']=None):
-        # Abort if object is already in full mode
-        if not self._mini_mode:
-            return False
         self.osm_id = osm_id if osm_id is not None else getattr(self, 'osm_id', None)
         if direct_constituents is not None:
             self.direct_constituents.extend(direct_constituents)

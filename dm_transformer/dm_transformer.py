@@ -46,7 +46,8 @@ def process_file(input_path: str, output_path: str):
     inv_rel_map_code = "INVERSE_RELATIONSHIPS = {\n" + ",\n".join([f"    '{k}': '{v}'" for k, v in relationship_inverses.items()]) + "\n}"
     generated_python_code = [
         import_block,
-        inv_rel_map_code  # Include the INV_REL_MAP code string
+        inv_rel_map_code,  # Include the INV_REL_MAP code string
+        "register = {}"
     ]
 
     # Iterate through all classes and generate corresponding code

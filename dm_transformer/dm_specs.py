@@ -196,6 +196,8 @@ class ModelSpecifications:
         Returns:
             str: Type of the reference (e.g., another class name).
         """
+        # transform to lower case
+        reference_name = reference_name.lower()
         return self.classes[class_name]['references'][reference_name]['type']
 
     def is_multi_reference(self, class_name: str, reference_name: str) -> bool:
@@ -209,6 +211,8 @@ class ModelSpecifications:
         Returns:
             bool: True if multi-reference, False otherwise.
         """
+        # transform to lower case
+        reference_name = reference_name.lower()
         return self.classes[class_name]['references'][reference_name]['multiplicity'] == 'multi'
 
     def is_attribute_required(self, class_name: str, attribute_name: str) -> bool:

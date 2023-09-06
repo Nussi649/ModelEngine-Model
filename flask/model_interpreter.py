@@ -101,11 +101,12 @@ class ModelInterpreter:
             register = general_register[class_name]
         return register
     
-    def object_from_node(self, node, records=None, reduced_object=None):
+    def object_from_node(self, class_name, node, records=None, reduced_object=None):
         """
         Constructs a full Python object from a Neo4j node.
 
         Parameters:
+            class_name: the expected class name
             node: The Neo4j node.
             records (list): Optional list of related records.
             reduced_object (ModelEntity): Optional reduced object that can be upgraded to full object representation
@@ -115,12 +116,8 @@ class ModelInterpreter:
         """
         if reduced_object:
             obj_class = type(reduced_object)
-            class_name = obj_class.__name__
+            assert class_name == obj_class.__name__
         else:
-            all_classes = set(self.model_specs.get_class_names())
-            class_name = next((label for label in node.labels if label in all_classes), None)
-            if not class_name:
-                raise ValueError("No valid class name found in node labels.")
             obj_class = self.resolve_class_name(class_name)
         key = node['key']
         custom_key = self.model_specs.get_key_attribute(class_name)
@@ -177,7 +174,7 @@ class ModelInterpreter:
             if not records:
                 return None
 
-            obj = self.object_from_node(records[0]['n'], records if include_related else None, reduced_object)
+            obj = self.object_from_node(class_name, records[0]['main_node'], records if include_related else None, reduced_object)
             return obj
 
         except Exception as e:
@@ -195,6 +192,7 @@ class ModelInterpreter:
             if not relationship or not rel_node:
                 continue
             
+            relationship = relationship.lower()
             rel_class_name = self.model_specs.get_reference_type(class_name, relationship)
             if rel_class_name not in register_cache:
                 register_cache[rel_class_name] = self.get_register(rel_class_name)
@@ -644,15 +642,23 @@ class ModelInterpreter:
 
 # endregion
 
+    def gather_objects(self):
+        objects_response = {}
+        general_register = getattr(self.loaded_module, "register")
+        for object_type, register in general_register.items():
+            objects_response[object_type] = [
+                {"name": key, "content": str(value)}
+                for key, value in register.items()
+            ]
+        return objects_response
+
     def process_request(self, input: str):
         # get execution scope
         self.execution_scope['self'] = self
-        # Capture the standard output
-        captured_output = io.StringIO()
-        sys.stdout = captured_output
 
         # Execute the code and capture the result of the last expression
         result = None
+        
         try:
             # If the input contains '=', assume it's an assignment and use exec
             if '=' in input:
@@ -665,13 +671,9 @@ class ModelInterpreter:
                 # Otherwise, assume it's an expression and use eval
                 result = eval(input, self.execution_scope)
         except Exception as e:
-            result = e
+            result = f"Error: {e}"
 
-        # Reset the standard output
-        sys.stdout = sys.__stdout__
+        objects = self.gather_objects()
 
-        # Get the captured output as a string
-        output = captured_output.getvalue()
-
-        return {"output": output, "result": str(result)}
+        return {"result": str(result), "objects": objects}
     

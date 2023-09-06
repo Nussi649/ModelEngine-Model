@@ -65,7 +65,11 @@ def process_request():
     """
     post_data = request.get_json()
     result = MODEL_INTERPRETER.process_request(post_data["command"])
-    return jsonify({"status": "ok", "output": result["output"], "result": result["result"]})
+    return jsonify({"status": "ok", "result": result["result"], "objects": result["objects"]})
+
+@app.route("/terminal")
+def terminal():
+    return render_template('terminal.html')
 
 if __name__ == "__main__":
     app.run(

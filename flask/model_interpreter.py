@@ -1,15 +1,15 @@
 import importlib.util
-import io
+import re
 import sys
 import inspect
 import json
-from abc import ABC
+from abc import ABC, ABCMeta
 from neo4j import GraphDatabase
 from types import ModuleType
 from pathlib import Path
 from collections import defaultdict
 from dm_specs import ModelSpecifications
-from typing import List, Tuple, Any, Iterable, get_args, get_type_hints
+from typing import _SpecialForm, List, Tuple, Any, Union, get_args, get_type_hints
 
 create_object_query = "CREATE (n:{class_name}) SET n = $attributes"
 get_object_query = """
@@ -17,6 +17,36 @@ get_object_query = """
     OPTIONAL MATCH (n)-[r]->(related)
     RETURN n, collect(r) as relationships, collect(related) as related_nodes
     """
+
+valid_commands = ["get", "create", "add", "assign", "eval", "help"]
+
+known_dicts = ["INVERSE_RELATIONSHIPS", "register"]
+
+command_help = """
+_______ Available Commands _______
+help [command] - further information about usage of each command
+get [class_name] [key]/[list of keys]/[attribute specification] optional: [name of return list] - loads a model object or list of model objects of type class_name that is either specified by its key(s) or an attribute/reference=value combination
+create [class_name] -help - provides information about the required and optional parameters
+create [class_name] [attribute/reference=value] ... [attribute/reference=value] - creates a new model object with the specified parameters both in program context as well as in persistent storage
+add [expression that evaluates to a model object]/[list of model objects] - adds a model object or list of model objects that is/are created in program context to persistent storage
+assign [name] [expression] - assigns an evaluated expression to a variable of arbitrary data type
+eval [expression] - evaluates any expression
+    """
+    
+def custom_split(input: str) -> List[Union[str, List]]:
+    # Matches lists like [item1, item2, ...] and individual words
+    pattern = r'\[([^\]]+)\]|([^ ]+)'
+    matches = re.findall(pattern, input)
+    args = []
+    for match in matches:
+        # Check if it's a list or a single word
+        if match[0]:  # If it's a list
+            arg = [val.strip() for val in match[0].split(',')]
+            args.append(arg)
+        else:
+            arg = match[1].strip()
+            args.append(arg)
+    return args
 
 BASIC_TYPES = {float, int, str}
 
@@ -181,6 +211,22 @@ class ModelInterpreter:
             # TODO: Handle the error robustly
             raise e
         
+    def _objects_match(self, obj1, obj2) -> bool:
+        """
+        Check if two objects match in every attribute and reference.
+        """
+        attrs = self.model_specs.get_attributes(type(obj1).__name__)
+        refs = self.model_specs.get_references(type(obj1).__name__)
+        
+        for attr in attrs:
+            if getattr(obj1, attr) != getattr(obj2, attr):
+                return False
+
+        for ref in refs:
+            if getattr(obj1, ref) != getattr(obj2, ref):
+                return False
+
+        return True
     
     def _fetch_references_from_records(self, class_name, records):
         references = {}
@@ -324,19 +370,25 @@ class ModelInterpreter:
             grouped_pairs[class_name].append(key)
 
         with self.driver.session() as session:
+            tx = session.begin_transaction()
             for class_name, keys in grouped_pairs.items():
+                register = self.get_register(class_name)
                 for key in keys:
-                    # First, try to get the object without hitting the database
-                    obj = self.get_object(class_name, key, reduced=True)
-                    if not obj or (obj.mini_mode and not reduced):
-                        tx = session.begin_transaction()
-                        obj = self.load_node(class_name, key, tx, reduced_object=obj, include_related=not reduced)
-                        tx.commit()
-                    objects.append(obj)
+                    # check register if the object is already loaded
+                    obj = register.get(key)
+                    # If an object was found and it's in full mode or only reduced mode is required
+                    if obj and (not obj.mini_mode or reduced):
+                        objects.append(obj)
+                        continue
+                    obj = self.load_node(class_name, key, tx, reduced_object=obj, include_related=not reduced)
+                    # add the result to return list if an object was found
+                    if obj:
+                        objects.append(obj)
+            tx.commit()
 
         return objects
     
-    def find_object(self, class_name, args, reduced=False): # TODO: Test
+    def find_objects(self, class_name, args, reduced=False): # TODO: Test
         """
         Finds objects of type class_name based on provided properties.
         
@@ -379,7 +431,7 @@ class ModelInterpreter:
 
         with self.driver.session() as session:
             tx = session.begin_transaction()
-            results = tx.run(query, args)
+            results = tx.run(query)
             
             # Gather nodes to process outside the session
             nodes_to_process = [record['n'] for record in results]
@@ -539,6 +591,91 @@ class ModelInterpreter:
         # 4. Return the updated object
         return obj
 
+    def add_object(self, obj_instance, tx=None) -> bool:
+        """
+        Synchronizes a given program object instance to the database.
+        If an object with the same key already exists in the database, it updates the existing object.
+        If not, it creates a new object in the database.
+
+        Parameters:
+            obj_instance: An instance of a model object.
+            tx: Optional transaction to run the database query.
+
+        Returns:
+            bool: True if the operation succeeded, False otherwise.
+        """
+        
+        def core_logic(transaction):
+            class_name = type(obj_instance).__name__
+            
+            # Validate if the instance is of a recognized model object type
+            if class_name not in self.model_specs.get_class_names():
+                return False
+            
+            key_name = self.model_specs.get_key_attribute(class_name)
+            key_value = obj_instance.key
+        
+            # Check for existing object in the database by key
+            existing_object = self.get_object(class_name, key_value)
+            if existing_object:
+                if self._objects_match(obj_instance, existing_object):
+                    return True
+        
+            # Convert the object instance to a dictionary format suitable for database insertion
+            args = {attr: getattr(obj_instance, attr) for attr in self.model_specs.get_attributes(class_name) if hasattr(obj_instance, attr)}
+            args.update({ref: getattr(obj_instance, ref) for ref in self.model_specs.get_references(class_name) if hasattr(obj_instance, ref)})
+            
+            # Handle references and ensure they exist in the database
+            for ref, value in args.items():
+                ref_class_name = type(value).__name__
+                if ref_class_name in self.model_specs.get_class_names():
+                    ref_obj = self.get_object(ref_class_name, value.key)
+                    if not ref_obj:
+                        # Check for inverse relationships
+                        inverse_rel = self.loaded_module.INVERSE_RELATIONSHIPS.get(ref, "")
+                        if inverse_rel:
+                            # Alert the caller
+                            print(f"Inverse relationship found for {ref}. Ensure both nodes exist before adding a relationship.")
+                            return False
+                        # If the referenced object doesn't exist, add it recursively
+                        added = self.add_object(value, transaction)
+                        if not added:
+                            return False  # Fail if we can't add the reference
+            
+            # Construct the creation query
+            attrs, refs = self.model_specs.separate_attrs_refs(class_name, args)
+            query_create, expected_rel_created = self._construct_create_query(class_name, attrs, refs)
+        
+            # Execute the query
+            counters = transaction.run(query_create).consume().counters
+            if (counters.nodes_created != 1) or (counters.relationships_created != expected_rel_created):
+                raise ValueError(f"Error creating node or relationships in Neo4j. Expected 1 node and {expected_rel_created} relationships but got {counters.nodes_created} nodes and {counters.relationships_created} relationships.")
+                
+            return True
+
+        if tx:
+            result = core_logic(tx)
+            if not result:
+                # Rollback the transaction if the function didn't succeed
+                tx.rollback()
+            return result
+        else:
+            with self.driver.session() as session:
+                result = session.write_transaction(core_logic)
+                return result
+
+    def add_multiple_objects(self, obj_instances: List, tx=None) -> bool:
+        if tx:
+            for obj in obj_instances:
+                if not self.add_object(obj, tx):
+                    return False
+        else:
+            with self.driver.session() as session:
+                for obj in obj_instances:
+                    if not session.write_transaction(self.add_object, obj):
+                        return False
+        return True
+
     def delete_object(self, class_name: str, key: str, tx=None): # TODO: Test
         """
         Deletes an existing object of type class_name identified by the key.
@@ -642,38 +779,283 @@ class ModelInterpreter:
 
 # endregion
 
-    def gather_objects(self):
-        objects_response = {}
-        general_register = getattr(self.loaded_module, "register")
-        for object_type, register in general_register.items():
-            objects_response[object_type] = [
-                {"name": key, "content": str(value)}
-                for key, value in register.items()
-            ]
-        return objects_response
+##########################
+### REQUEST PROCESSING ###
+##########################
 
     def process_request(self, input: str):
-        # get execution scope
-        self.execution_scope['self'] = self
+        # Split input by space characters into a list of words
+        words = custom_split(input)
 
-        # Execute the code and capture the result of the last expression
-        result = None
-        
+        # If the input is empty, return an appropriate response
+        if not words:
+            return {"result": "No command provided", "objects": self.gather_objects()}
+
+        # Validate the first word
+        command = words[0].lower()  # Convert command to lowercase to ensure case-insensitivity
+        if command not in valid_commands:
+            return {"result": "Unknown command", "objects": self.gather_objects()}
+
+        # Arguments for the command
+        args = words[1:]
+
         try:
-            # If the input contains '=', assume it's an assignment and use exec
-            if '=' in input:
-                # Execute the assignment
-                exec(input, self.execution_scope)
-                # Parse the variable name and retrieve its value
-                var_name = input.split('=')[0].strip()
-                result = self.execution_scope.get(var_name)
+            # Depending on the command, call the corresponding function
+            if command == "get":
+                result = self.process_get(args)
+            elif command == "create":
+                result = self.process_create(args)
+            elif command == "add":
+                result = self.process_add(args)
+            elif command == "assign":
+                result = self.process_assign(args)
+            elif command == "eval":
+                result = self.process_eval(args)
+            elif command == "help":
+                result = self.process_help(args)
             else:
-                # Otherwise, assume it's an expression and use eval
-                result = eval(input, self.execution_scope)
+                result = "Invalid command"  # This should never happen due to the previous check, but it's good to have a fallback
+
         except Exception as e:
             result = f"Error: {e}"
 
-        objects = self.gather_objects()
+        return {"result": str(result), "objects": self.gather_objects()}
+    
+    def process_get(self, args: List[Union[str, List[str]]]) -> str:
+        # Initial validation of parameters
+        if not args or len(args) < 2:
+            return "Please specify the class name and key or attributes to get an object."
+        
+        class_name = self.resolve_single_exp(args[0])
+        
+        # Check for the second argument's type
+        second_arg = args[1]
 
-        return {"result": str(result), "objects": objects}
+        if isinstance(second_arg, str):
+            # It's a single object retrieval
+            if '=' not in second_arg:  # It's a key
+                if len(args) != 2:
+                    return "Invalid arguments for the get command."
+                
+                key = self.resolve_single_exp(second_arg)
+                obj = self.get_object(class_name, key)
+                if obj:
+                    return str(obj)
+                else:
+                    return f"No object of type {class_name} with key {key} found."
+            
+            else:  # It's an attribute/reference specification
+                if len(args) > 3:
+                    return "Invalid arguments for the get command."
+                
+                # Split attribute/reference name and value to look for
+                split_args = second_arg.split('=')
+                filter_args = {split_args[0]: self.resolve_single_exp(split_args[1])}
+                objects = self.find_objects(class_name, filter_args)
+                if not objects:
+                    return f"No objects of type {class_name} matching the criteria found."
+                
+                if len(args) == 3:  # If there's a list name provided
+                    list_name = self.resolve_single_exp(args[2])
+                    setattr(self.loaded_module, list_name, objects)
+                    return f"{len(objects)} objects of type {class_name} added to {list_name}."
+                else:
+                    return "\n".join([str(obj) for obj in objects])
+        elif isinstance(second_arg, List):
+            # It's a list of keys
+            if len(args) != 3:
+                return "Invalid arguments for the get command. Requires exactly three arguments if second argument is a list of keys."
+            
+            keys = [self.resolve_single_exp(key) for key in second_arg]
+            objects = self.get_multiple_objects([(class_name, key) for key in keys])
+            if not objects:
+                return f"No objects of type {class_name} found for the given keys."
+
+            list_name = self.resolve_single_exp(args[2])
+            setattr(self.loaded_module, list_name, objects)
+            return f"{len(objects)} objects of type {class_name} added to {list_name}."
+
+        return "Invalid arguments for the get command."
+
+
+    def process_create(self, args: List[Union[str, List[str]]]) -> str:
+        if not args:
+            return "No arguments provided."
+        class_name = args[0]
+        if class_name not in self.model_specs.get_class_names():
+            return "Unknown Object Type."
+        if len(args) < 2:
+            return "Command requires at least 2 arguments. Call 'help create' for further information."
+        if args[1] == "-help":
+            return "\n".join(self.model_specs.get_variable_summary(class_name))
+        init_params = {}
+        for arg in args[1:]:
+            parts = arg.split('=')
+            init_params[parts[0]] = self.resolve_single_exp(parts[1])
+        obj = self.create_object(class_name, init_params)
+        return str(obj)
+
+    def process_add(self, args: List[Union[str, List[str]]]) -> str:
+        if not args:
+            return "No arguments provided."
+
+        # Resolve the provided expression to an object or list of objects
+        resolved_obj = self.resolve_single_exp(args[0])
+        
+        if isinstance(resolved_obj, list):
+            if self.add_multiple_objects(resolved_obj):
+                return "All objects added successfully."
+            return f"Failed to add list of objects."
+        else:
+            if self.add_object(resolved_obj):
+                return f"Object {resolved_obj} added successfully."
+            else:
+                return f"Failed to add object: {resolved_obj}"
+
+    def process_assign(self, args: List[Union[str, List[str]]]) -> str:
+        if len(args) < 2:
+            return "Command requires at least 2 arguments. Call 'help assign' for further information."
+
+        var_name = args[0]
+        expression = " ".join(args[1:])  # In case the expression was split into multiple args
+
+        # Evaluate the expression
+        try:
+            # get execution scope
+            self.execution_scope['self'] = self
+            value = eval(expression, self.execution_scope)
+        except Exception as e:
+            return f"Error evaluating expression: {e}"
+
+        # Assign the value to the variable in the loaded_module context
+        setattr(self.loaded_module, var_name, value)
+        return f"Assigned {value} to {var_name}."
+
+    def process_eval(self, args: List[Union[str, List[str]]]) -> str:
+        expression = " ".join(args)  # In case the expression was split into multiple args
+
+        # Evaluate the expression
+        try:
+            # get execution scope
+            self.execution_scope['self'] = self
+            value = eval(expression, self.execution_scope)
+        except Exception as e:
+            return f"Error evaluating expression: {e}"
+        
+        return str(value)
+
+    def process_help(self, args: List[Union[str, List[str]]]) -> str:
+        valid_arguments = valid_commands[:-1]
+        if not args:
+            return command_help
+        
+        param = args[0].lower()
+        if param not in valid_arguments:
+            return "Unknown argument"
+
+        if param == "get":
+            return """
+Usage for 'get' command:
+1. Get by key: get [class_name] [key]
+2. Get by property: get [class_name] [property=specific_value]
+3. Get multiple by keys: get [class_name] [comma-separated-keys] [name of list]
+4. Get multiple by property: get [class_name] [property=specific_value] [name of list]
+
+property refers to both attributes and relationships. can be specified directly as string or indirectly through variables, which get recognized by a leading $ (e.g., $variable, $type.key).
+            """
+
+        elif param == "create":
+            return """
+Usage for 'create' command:
+create [class_name] -help - Displays required and optional parameters for class_name.
+create [class_name] [attribute1=value1] ... [attributeN=valueN] - Create an object of type class_name with specified attributes.
+            """
+
+        elif param == "add":
+            return """
+Usage for 'add' command:
+1. Add a single object: add [expression that evaluates to a model object]
+2. Add multiple objects: add [comma-separated list of model objects]
+            """
+
+        elif param == "assign":
+            return """
+Usage for 'assign' command:
+assign [variable_name] [expression] - Assigns the result of the expression to the specified variable.
+            """
+
+        elif param == "eval":
+            return """
+Usage for 'eval' command:
+eval [expression] - Evaluates the provided expression and returns the result.
+            """
+        return "this should not be reachable"
+
+    def gather_objects(self):
+        response = {
+            "model_objects": {},
+            "runtime_objects": {
+                "lists": [],
+                "dicts": [],
+                "variables": []
+            }
+        }
+        
+        # Handle the general_register (model objects)
+        general_register = getattr(self.loaded_module, "register", {})
+        for object_type, register in general_register.items():
+            response["model_objects"][object_type] = [
+                {"name": key, "content": str(value)}
+                for key, value in register.items()
+            ]
+        
+        # Handle other runtime objects
+        for attr_name in dir(self.loaded_module):
+            if attr_name.startswith("_"):  # Exclude private members
+                continue
+            value = getattr(self.loaded_module, attr_name)
+            if isinstance(value, type) or isinstance(value, ABCMeta) or isinstance(value, _SpecialForm):
+                continue
+            obj_repr = {"name": attr_name}
+            if isinstance(value, list):
+                obj_repr["content"] = [{"type": type(item).__name__, "value": str(item)} for i, item in enumerate(value)]
+                response["runtime_objects"]["lists"].append(obj_repr)
+            elif isinstance(value, dict):
+                if attr_name in known_dicts:
+                    continue
+                obj_repr["content"] = [{"key": str(k), "type": type(v).__name__, "value": str(v)} for k, v in value.items()]
+                response["runtime_objects"]["dicts"].append(obj_repr)
+            else:
+                obj_repr["type"] = type(value).__name__
+                obj_repr["content"] = str(value)
+                response["runtime_objects"]["variables"].append(obj_repr)
+        
+        return response
+
+    def resolve_single_exp(self, expr: str):
+        if " " in expr:
+            raise ValueError("The expression should be a single word.")
+        
+        if expr.startswith("$"):
+            if '.' in expr:
+                type_name, key = expr[1:].split('.')
+                # Fetch from the respective register
+                register = self.get_register(type_name)
+                return register.get(key)
+            else:
+                # Fetch from module context
+                return getattr(self.loaded_module, expr[1:])
+        # Check for potential number values
+        try:
+            return int(expr)
+        except ValueError:
+            pass
+
+        try:
+            return float(expr)
+        except ValueError:
+            pass
+        
+        # If it's not recognized as a variable, object, integer, or float, return as string
+        return expr
     

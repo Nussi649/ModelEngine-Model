@@ -161,6 +161,32 @@ class ModelSpecifications:
         """
         return list(self.classes.keys())
     
+    def get_attributes(self, class_name: str) -> List[str]:
+        """
+        Provides the names of all attributes of a given class.
+
+        Parameters:
+            class_name (str): Name of the class.
+
+        Returns:
+            List[str]: List of attribute names as strings
+        """
+        class_dict = self.classes.get(class_name)
+        return class_dict['attributes'] if class_dict else None
+
+    def get_references(self, class_name: str) -> List[str]:
+        """
+        Provides the names of all references of a given class.
+
+        Parameters:
+            class_name (str): Name of the class.
+
+        Returns:
+            List[str]: List of reference names as strings
+        """
+        class_dict = self.classes.get(class_name)
+        return class_dict['references'] if class_dict else None
+
     def has_any_reference(self, class_name: str) -> bool:
         """
         Validates whether a class contains references.
@@ -256,6 +282,8 @@ class ModelSpecifications:
             bool: True if arguments match the model specifications, False otherwise.
         """
         class_info = self.classes.get(class_name)
+        if not class_info:
+            return False
         args_copy = args.copy()
         key_name = class_info.get('key')
         if key_name and 'key' in args_copy:
@@ -334,5 +362,22 @@ class ModelSpecifications:
                 references[key] = value
 
         return attributes, references
+
+    def get_variable_summary(self, class_name: str) -> List[str]:
+        """
+        Provides a textual summary of the attributes and references associated with a given class.
+
+        Parameters:
+            class_name (str): Name of the class.
+
+        Returns:
+            List[str]: List of strings summarizing each attribute and reference
+        """
+        class_dict = self.classes.get(class_name)
+        if not class_dict:
+            return None
+        attr_sum = [f"{key + (' (key)' if data['is_key'] else '')} : {data['type'] + ' (required)' if data['required'] else ' (optional)'}" for key, data in class_dict['attributes'].items()]
+        ref_sum = [f"{key} : {data['type'] + ' (required)' if data['required'] else ' (optional)' } ({data['multiplicity']}){' Inverse: ' + data['inverse'] if data['inverse'] else ''}" for key, data in class_dict['references'].items()]
+        return attr_sum + ref_sum
 
 # endregion

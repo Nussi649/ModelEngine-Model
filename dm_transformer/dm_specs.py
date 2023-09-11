@@ -5,7 +5,8 @@ from typing import List, Tuple
 type_map = {
     "str": str,
     "float": float,
-    "int": int
+    "int": int,
+    "bool": bool
 }
 
 def attribute_type_to_annotation(attr_type: str) -> str:
@@ -14,6 +15,7 @@ def attribute_type_to_annotation(attr_type: str) -> str:
         "int": "int",
         "pos_geo": "tuple",
         "float": "float",
+        "boolean": "bool",
         "datetime": "datetime",
     }.get(attr_type, "str")
 
@@ -161,18 +163,29 @@ class ModelSpecifications:
         """
         return list(self.classes.keys())
     
-    def get_attributes(self, class_name: str) -> List[str]:
+    def get_attributes(self, class_name: str, indiv_key=True) -> List[str]:
         """
         Provides the names of all attributes of a given class.
 
         Parameters:
             class_name (str): Name of the class.
+            indiv_key (bool): Whether to use the individual key name (e.g. 'identifier') or the general key name 'key'.
 
         Returns:
             List[str]: List of attribute names as strings
         """
         class_dict = self.classes.get(class_name)
-        return class_dict['attributes'] if class_dict else None
+        if not class_dict:
+            return None
+        
+        attributes = class_dict.get('attributes', [])
+
+        # If indiv_key is False, replace the individual key name with the general 'key' name
+        if not indiv_key:
+            individual_key_name = class_dict.get('key', 'key')
+            attributes = ['key' if attr == individual_key_name else attr for attr in attributes]
+
+        return attributes
 
     def get_references(self, class_name: str) -> List[str]:
         """

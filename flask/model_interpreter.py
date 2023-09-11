@@ -1,6 +1,8 @@
 import importlib.util
 import re
 import sys
+import random
+import string
 import inspect
 import json
 from abc import ABC, ABCMeta
@@ -18,35 +20,40 @@ get_object_query = """
     RETURN n, collect(r) as relationships, collect(related) as related_nodes
     """
 
-valid_commands = ["get", "create", "add", "assign", "eval", "help"]
+valid_commands = ["get", "create", "add", "help"]
 
 known_dicts = ["INVERSE_RELATIONSHIPS", "register"]
 
 command_help = """
+_______ Command Usage _______
+
+- Any input is directly evaluated as a Python expression unless it starts with the '>' character.
+- Expressions starting with '>' are treated as special commands.
+
 _______ Available Commands _______
-help [command] - further information about usage of each command
-get [class_name] [key]/[list of keys]/[attribute specification] optional: [name of return list] - loads a model object or list of model objects of type class_name that is either specified by its key(s) or an attribute/reference=value combination
-create [class_name] -help - provides information about the required and optional parameters
-create [class_name] [attribute/reference=value] ... [attribute/reference=value] - creates a new model object with the specified parameters both in program context as well as in persistent storage
-add [expression that evaluates to a model object]/[list of model objects] - adds a model object or list of model objects that is/are created in program context to persistent storage
-assign [name] [expression] - assigns an evaluated expression to a variable of arbitrary data type
-eval [expression] - evaluates any expression
-    """
-    
-def custom_split(input: str) -> List[Union[str, List]]:
-    # Matches lists like [item1, item2, ...] and individual words
-    pattern = r'\[([^\]]+)\]|([^ ]+)'
-    matches = re.findall(pattern, input)
-    args = []
-    for match in matches:
-        # Check if it's a list or a single word
-        if match[0]:  # If it's a list
-            arg = [val.strip() for val in match[0].split(',')]
-            args.append(arg)
-        else:
-            arg = match[1].strip()
-            args.append(arg)
-    return args
+
+> help [command] - Provides further information about the usage of each command.
+
+> get [class_name] [attribute/reference=value] ... [attribute/reference=value] optional: as [name of return list] 
+    - Loads a model object or list of model objects of type class_name based on attribute/reference=value specifications. 
+    - Results can optionally be stored under a specific name.
+
+> create [class_name] -help 
+    - Provides information about the required and optional parameters for a specific class.
+
+> create [class_name] [attribute/reference=value] ... [attribute/reference=value] 
+    - Creates a new model object with the specified parameters in both program context and persistent storage.
+
+> add [expression that evaluates to a model object or list of model objects] 
+    - Adds a model object or list of model objects created in program context to persistent storage.
+
+_______ Referring to Model Objects _______
+
+- To refer to a specific model object within an expression, use the format: @Class.Key
+- This format can be used anywhere within your expression to fetch and utilize model objects.
+
+"""
+
 
 BASIC_TYPES = {float, int, str}
 
@@ -68,7 +75,7 @@ class ModelInterpreter:
         if model_code is not None:
             self.init_module(self.load_model_code(model_code))
         # Load and parse the specifications file
-        self.model_specs = ModelSpecifications(xml_path="/workspace/data_models/ResourceTransmission_v1.xml",
+        self.model_specs = ModelSpecifications(xml_path="/workspace/data_models/NumberTheory.xml",
                                                xsd_path="/workspace/data_models/format_specifications/dm_specification_schema.xsd")
 
     @property
@@ -172,7 +179,7 @@ class ModelInterpreter:
         register[key] = new_obj
         return new_obj
     
-    def load_node(self, class_name: str, key: str, tx, include_related=True, reduced_object=None):
+    def load_node(self, class_name: str, key: str, tx, reduced=False, reduced_object=None):
         """
         Fetches the node from the database and returns its corresponding Python object.
 
@@ -189,7 +196,7 @@ class ModelInterpreter:
         query = f"MATCH (n:{class_name}) WHERE n.key = $key "
 
         # If related nodes and relationships are to be included, modify the query
-        if include_related:
+        if not reduced:
             query += """
             OPTIONAL MATCH (n)-[r]->(related)
             RETURN 
@@ -204,7 +211,7 @@ class ModelInterpreter:
             if not records:
                 return None
 
-            obj = self.object_from_node(class_name, records[0]['main_node'], records if include_related else None, reduced_object)
+            obj = self.object_from_node(class_name, records[0]['main_node'], records if not reduced else None, reduced_object)
             return obj
 
         except Exception as e:
@@ -261,25 +268,39 @@ class ModelInterpreter:
         query = [f"CREATE (a:{class_name} {{ {node_attrs} }})"]
         expected_rel_created = 0
 
-        if refs:
-            query.append("WITH a")
+        if any(ref_data for ref_data in refs.values()):
             for rel_name, rel_data in refs.items():
-                # Check if the ref data is an object or a dictionary
-                if isinstance(rel_data, dict):
-                    related_class_name = rel_data['class_name']
-                    related_key = rel_data['key']
-                else:  # It's an object
-                    related_class_name = type(rel_data).__name__
-                    related_key = rel_data.key
-
                 relationship_type = rel_name.upper()
                 inv_rel_type = self.loaded_module.INVERSE_RELATIONSHIPS.get(rel_name, "").upper()
-                query.append(f"MATCH (b_{rel_name}:{related_class_name} {{key: '{related_key}'}})")
-                query.append(f"CREATE (a)-[:{relationship_type}]->(b_{rel_name})")
-                expected_rel_created += 1
-                if inv_rel_type:
-                    query.append(f"CREATE (b_{rel_name})-[:{inv_rel_type}]->(a)")
+
+                # Check if rel_data is a list (indicating multi-reference)
+                if isinstance(rel_data, list):
+                    for item in rel_data:
+                        related_class_name = type(item).__name__
+                        related_key = item.key
+                        query.append("WITH a")
+                        query.append(f"MATCH (b_{rel_name}:{related_class_name} {{key: '{related_key}'}})")
+                        query.append(f"CREATE (a)-[:{relationship_type}]->(b_{rel_name})")
+                        expected_rel_created += 1
+                        if inv_rel_type:
+                            query.append(f"CREATE (b_{rel_name})-[:{inv_rel_type}]->(a)")
+                            expected_rel_created += 1
+
+                else:  # Single reference
+                    if isinstance(rel_data, dict):
+                        related_class_name = rel_data['class_name']
+                        related_key = rel_data['key']
+                    else:  # It's an object
+                        related_class_name = type(rel_data).__name__
+                        related_key = rel_data.key
+
+                    query.append("WITH a")
+                    query.append(f"MATCH (b_{rel_name}:{related_class_name} {{key: '{related_key}'}})")
+                    query.append(f"CREATE (a)-[:{relationship_type}]->(b_{rel_name})")
                     expected_rel_created += 1
+                    if inv_rel_type:
+                        query.append(f"CREATE (b_{rel_name})-[:{inv_rel_type}]->(a)")
+                        expected_rel_created += 1
 
         return "\n".join(query), expected_rel_created
     
@@ -321,7 +342,7 @@ class ModelInterpreter:
 
 # region CRUD related
 
-    def get_object(self, class_name: str, key: str, reduced=False, object_data=None):
+    def get_object(self, class_name: str, key: str, reduced=False):
         """
         Finds an object of type class_name with the specified key.
         It first checks in the already loaded objects, then queries the database.
@@ -331,12 +352,10 @@ class ModelInterpreter:
             class_name (str): name of the object class
             key (str): value of key attribute of object to be identified by
             reduced (bool): Whether to load the object in mini_mode or fully.
-            object_data (dict, optional): Dictionary containing the object's data, skipping the database query if provided.
             
         Returns:
             Object of type class_name if it exists, None otherwise
         """
-        target_class = self.resolve_class_name(class_name)
         register = self.get_register(class_name)
 
         # Check if object is available in loaded context aka object register
@@ -348,7 +367,7 @@ class ModelInterpreter:
         # Fetch the object data from the database because we have nothing loaded and need to know, if the object even exists
         with self.driver.session() as session:
             tx = session.begin_transaction()
-            obj = self.load_node(class_name, key, tx, not reduced)
+            obj = self.load_node(class_name, key, tx, reduced)
             tx.commit()
         return obj
 
@@ -401,14 +420,14 @@ class ModelInterpreter:
             List of objects matching the criteria.
         """
         # Validate args
-        valid_attributes = self.model_specs.get_attributes(class_name)
+        valid_attributes = self.model_specs.get_attributes(class_name, indiv_key=False)
         valid_references = self.model_specs.get_references(class_name)
         property_filters = []
         relationship_filters = []
 
         for key, value in args.items():
             if key in valid_attributes:
-                property_filters.append(f"n.{key} = ${key}")
+                property_filters.append(f"n.{key} = {value}")
             elif key in valid_references:
                 if isinstance(value, str):  # If value is a key string
                     relationship_key = value
@@ -444,7 +463,7 @@ class ModelInterpreter:
 
                 # Check register and handle object
                 if not obj or (obj and obj.mini_mode and not reduced):
-                    obj = self.load_node(class_name, key, tx, include_related=True, reduced_object=obj)
+                    obj = self.load_node(class_name, key, tx, reduced=reduced, reduced_object=obj)
                 elif reduced and not obj:
                     obj = self.object_from_node(node, reduced=True)
                 
@@ -606,11 +625,44 @@ class ModelInterpreter:
         """
         
         def core_logic(transaction):
+            def prepare_reference(ref_name, ref_value):
+                """
+                Helper function to process a reference (either mono or multi).
+                Returns True if successful, False otherwise.
+                """
+                # Handle multi-references
+                if isinstance(ref_value, list):
+                    for item in ref_value:
+                        prepare_single_reference(ref_name, item)
+                # Handle mono-references
+                else:
+                    prepare_single_reference(ref_name, ref_value)
+
+            def prepare_single_reference(ref_name, ref_instance):
+                """
+                Helper function to process a single reference.
+                Returns True if successful, False otherwise.
+                """
+                ref_class_name = type(ref_instance).__name__
+                if ref_class_name not in self.model_specs.get_class_names():
+                    raise ValueError(f"Invalid object type in reference for {ref_name}.")
+                ref_obj = self.get_object(ref_class_name, ref_instance.key)
+                if not ref_obj:
+                    # Check for inverse relationships
+                    inverse_rel = self.loaded_module.INVERSE_RELATIONSHIPS.get(ref_name, "")
+                    if inverse_rel:
+                        # Alert the caller
+                        raise ValueError(f"Inverse relationship found for {ref_name}. Can't handle this for now.")
+                    # If the referenced object doesn't exist, add it recursively
+                    try:
+                        self.add_object(ref_instance, transaction)
+                    except Exception as e:
+                        raise ReferenceError(f"Failed to make sure required referenced object {str(ref_instance)} exists because of:\r\n{e}\r\nAborting...")
             class_name = type(obj_instance).__name__
             
             # Validate if the instance is of a recognized model object type
             if class_name not in self.model_specs.get_class_names():
-                return False
+                raise ValueError(f"Add object call on wrong object type. Needs to be representing a valid model object class.")
             
             key_name = self.model_specs.get_key_attribute(class_name)
             key_value = obj_instance.key
@@ -621,27 +673,16 @@ class ModelInterpreter:
                 if self._objects_match(obj_instance, existing_object):
                     return True
         
-            # Convert the object instance to a dictionary format suitable for database insertion
-            args = {attr: getattr(obj_instance, attr) for attr in self.model_specs.get_attributes(class_name) if hasattr(obj_instance, attr)}
-            args.update({ref: getattr(obj_instance, ref) for ref in self.model_specs.get_references(class_name) if hasattr(obj_instance, ref)})
+            # Compile arguments for object creation. Start with references
+            args = {ref: getattr(obj_instance, ref) for ref in self.model_specs.get_references(class_name) if hasattr(obj_instance, ref)}
             
             # Handle references and ensure they exist in the database
             for ref, value in args.items():
-                ref_class_name = type(value).__name__
-                if ref_class_name in self.model_specs.get_class_names():
-                    ref_obj = self.get_object(ref_class_name, value.key)
-                    if not ref_obj:
-                        # Check for inverse relationships
-                        inverse_rel = self.loaded_module.INVERSE_RELATIONSHIPS.get(ref, "")
-                        if inverse_rel:
-                            # Alert the caller
-                            print(f"Inverse relationship found for {ref}. Ensure both nodes exist before adding a relationship.")
-                            return False
-                        # If the referenced object doesn't exist, add it recursively
-                        added = self.add_object(value, transaction)
-                        if not added:
-                            return False  # Fail if we can't add the reference
+                prepare_reference(ref, value)
             
+            # also add attributes
+            args.update({attr: getattr(obj_instance, attr) for attr in self.model_specs.get_attributes(class_name, indiv_key=False) if hasattr(obj_instance, attr)})
+
             # Construct the creation query
             attrs, refs = self.model_specs.separate_attrs_refs(class_name, args)
             query_create, expected_rel_created = self._construct_create_query(class_name, attrs, refs)
@@ -651,30 +692,74 @@ class ModelInterpreter:
             if (counters.nodes_created != 1) or (counters.relationships_created != expected_rel_created):
                 raise ValueError(f"Error creating node or relationships in Neo4j. Expected 1 node and {expected_rel_created} relationships but got {counters.nodes_created} nodes and {counters.relationships_created} relationships.")
                 
-            return True
+            def process_single_reference(expected_type, ref_obj):
+                if type(ref_obj).__name__ == expected_type:
+                    return self.get_object(ref_type, ref_obj.key)
+                return None
 
+            # Make sure that object references to register objects and not some random copy
+            for ref_name, ref_value in refs.items():
+                ref_type = self.model_specs.get_reference_type(class_name, ref_name)
+                is_multi = self.model_specs.is_multi_reference(class_name, ref_name)
+                if is_multi:
+                    if isinstance(ref_value, list):
+                        if not ref_value: # if no objects are referenced, continue
+                            continue
+                        new_ref_list = []
+                        for item in ref_value:
+                            processed_item = process_single_reference(ref_type, item)
+                            if processed_item:
+                                new_ref_list.append(processed_item)
+                            else:
+                                raise ValueError(f"Unexpected Error: while post-processing the {ref_name} reference of {str(obj_instance)} the expected object {str(ref_value)} could not be acquired. Aborting...")
+                        setattr(obj_instance, ref_name, new_ref_list)
+                    else:
+                        raise ValueError(f"Unexpected Error: while post-processing the expected multi {ref_name} reference of {str(obj_instance)} there was no list encountered. Aborting...")
+                else:
+                    # Single reference
+                    processed_ref = process_single_reference(ref_type, ref_value)
+                    if processed_ref:
+                        setattr(obj_instance, ref_name, processed_ref)
+                    else:
+                        raise ValueError(f"Unexpected Error: while post-processing the {ref_name} reference of {str(obj_instance)} the expected object {str(ref_value)} could not be acquired. Aborting...")
+            
+            # Put added object in register
+            self.get_register(class_name)[obj_instance.key] = obj_instance
         if tx:
-            result = core_logic(tx)
-            if not result:
-                # Rollback the transaction if the function didn't succeed
-                tx.rollback()
-            return result
+            core_logic(tx)
         else:
             with self.driver.session() as session:
                 result = session.write_transaction(core_logic)
                 return result
 
     def add_multiple_objects(self, obj_instances: List, tx=None) -> bool:
-        if tx:
-            for obj in obj_instances:
-                if not self.add_object(obj, tx):
-                    return False
-        else:
+        def do_work(transaction, obj_list):
+            added_objects = []
+            try:
+                for obj in obj_list:
+                    self.add_object(obj, transaction)
+                    added_objects.append(obj)
+                return True
+            except Exception as e:
+                print(f"Failed to add objects due to: {e}")
+                # If an exception happened, rollback changes by removing added objects from register
+                register = self.execution_scope["register"]
+                for obj in added_objects:
+                    del register[type(obj).__name__][obj.key]
+                return False
+
+        if tx:  # If a transaction is already provided, use it.
+            return do_work(tx, obj_instances)
+
+        else:  # If no transaction is provided, create a session and then a transaction.
             with self.driver.session() as session:
-                for obj in obj_instances:
-                    if not session.write_transaction(self.add_object, obj):
-                        return False
-        return True
+                tx = session.begin_transaction()
+                success = do_work(tx, obj_instances)
+                if success:
+                    tx.commit()
+                else:
+                    tx.rollback()
+                return success
 
     def delete_object(self, class_name: str, key: str, tx=None): # TODO: Test
         """
@@ -783,213 +868,269 @@ class ModelInterpreter:
 ### REQUEST PROCESSING ###
 ##########################
 
-    def process_request(self, input: str):
-        # Split input by space characters into a list of words
-        words = custom_split(input)
+    def _generate_response(self, message: str):
+        return {"result": str(message), "objects": self.gather_objects()}
 
-        # If the input is empty, return an appropriate response
-        if not words:
-            return {"result": "No command provided", "objects": self.gather_objects()}
+    def _interpret_input(self, input_str):
+        # Recognize all @Class.Key mentions and replace accordingly
+        pattern = r'@([\w]+)\.([\w]+)(?=\W|$)'  # This regex captures @Class.Key
+        replacement = "self.get_object('\\1', '\\2')"  # Replacement pattern for the recognized mentions
 
-        # Validate the first word
-        command = words[0].lower()  # Convert command to lowercase to ensure case-insensitivity
-        if command not in valid_commands:
-            return {"result": "Unknown command", "objects": self.gather_objects()}
+        interpreted_input = re.sub(pattern, replacement, input_str)
+        return interpreted_input
 
-        # Arguments for the command
-        args = words[1:]
+    def _generate_random_name(self, length=8):
+        # Generate a random name for storing the result if no name is provided
+        return ''.join(random.choice(string.ascii_lowercase) for _ in range(length))
 
-        try:
-            # Depending on the command, call the corresponding function
-            if command == "get":
-                result = self.process_get(args)
-            elif command == "create":
-                result = self.process_create(args)
-            elif command == "add":
-                result = self.process_add(args)
-            elif command == "assign":
-                result = self.process_assign(args)
-            elif command == "eval":
-                result = self.process_eval(args)
-            elif command == "help":
-                result = self.process_help(args)
+    def process_request(self, input_str: str):
+        # Check if the input starts with a special command indicator ('>')
+        if input_str.startswith('>'):
+            result = self.process_command(input_str[1:].strip())  # Remove the '>' and pass the rest
+        else:
+            try:
+                result = self.execute_expression(input_str)
+            except Exception as e:
+                result = f"Error occurred during execution of {input_str}:\r\n{str(e)}"
+        return self._generate_response(str(result))
+
+    def execute_expression(self, expression: str):
+        exp = self._interpret_input(expression)
+        # get execution scope
+        self.execution_scope['self'] = self
+        # If the expression contains '=', assume it's an assignment and use exec
+        if '=' in exp:
+            # Execute the assignment - TODO: make robust against malicious code execution
+            exec(exp, self.execution_scope)
+            # Parse the variable name and retrieve its value
+            var_name = expression.split('=')[0].strip()
+            result = self.execution_scope.get(var_name)
+        else:
+            # Otherwise, assume it's an expression and use eval
+            result = eval(exp, self.execution_scope)
+        return result
+
+    def process_command(self, command_str):
+        # Split the input to identify the command and its arguments
+        parts = command_str.split(maxsplit=1)  # maxsplit ensures only the first space is considered
+        command = parts[0]
+        if not command in valid_commands:
+            return f"Unknown command: {command}"
+        arguments = parts[1] if len(parts) > 1 else ""
+
+        # Determine which command to process
+        if command == "add":
+            return self.process_add(arguments)
+        elif command == "create":
+            return self.process_create(arguments)
+        elif command == "get":
+            return self.process_get(arguments)
+        elif command == "help":
+            return self.process_help(arguments)
+        return f"Unknown command: {command}"
+
+    def process_get(self, command_str: str) -> str:
+        """
+        Processes a 'get' command to retrieve model objects based on specified attributes.
+
+        Parameters:
+        - command_str (str): The command string, starting with the class name followed 
+                            by a series of attribute=value pairs, optionally ending with 
+                            'as <name>' to specify the name of the list or variable under 
+                            which the result should be stored.
+
+        Behavior:
+        1. If the command contains only the class name and "-help", it returns a summary of 
+        the available variables for that class.
+        2. The command then processes the attribute=value pairs to build the filter criteria.
+        3. If the keyword 'as' is encountered, the subsequent word is used as the name under 
+        which the result will be stored. If not provided, a random name is generated.
+        4. The command attempts to fetch model objects based on the filter criteria.
+        5. If only one object is fetched, it is stored directly under the specified or 
+        generated name. If multiple objects are fetched, they are stored as a list.
+
+        Returns:
+        - A string message indicating the outcome of the command, which could be an error 
+        message, a summary of available variables, or a success message detailing the 
+        number of objects retrieved and their storage name.
+
+        Example usage:
+        > get ClassName attribute1=value1 attribute2=value2 as result_name
+        > get ClassName -help
+        """
+        # Split the arguments
+        args = command_str.split()
+
+        # Validate if the class name is provided
+        if not args:
+            return "Please specify the class name and the attributes to get an object."
+
+        class_name = args[0]
+
+        if len(args) > 1 and args[1] == "-help":
+            return "\n".join(self.model_specs.get_variable_summary(class_name))
+
+        # Process the attribute/reference specifications
+        filter_args = {}
+        list_name = None
+        for arg in args[1:]:
+            if arg == "as":
+                # The next argument should be the name of the list
+                try:
+                    list_name = args[args.index(arg) + 1]
+                except IndexError:
+                    return "Expected a name after 'as'."
+                break
+            elif "=" in arg:
+                key, value = arg.split("=", 1)
+                filter_args[key] = self.execute_expression(value)
             else:
-                result = "Invalid command"  # This should never happen due to the previous check, but it's good to have a fallback
+                return f"Invalid argument format: {arg}"
 
-        except Exception as e:
-            result = f"Error: {e}"
+        # If no name is provided, generate a random one
+        if not list_name:
+            list_name = self._generate_random_name()
 
-        return {"result": str(result), "objects": self.gather_objects()}
-    
-    def process_get(self, args: List[Union[str, List[str]]]) -> str:
-        # Initial validation of parameters
-        if not args or len(args) < 2:
-            return "Please specify the class name and key or attributes to get an object."
-        
-        class_name = self.resolve_single_exp(args[0])
-        
-        # Check for the second argument's type
-        second_arg = args[1]
+        # Fetch the objects using the filter arguments
+        objects = self.find_objects(class_name, filter_args)
 
-        if isinstance(second_arg, str):
-            # It's a single object retrieval
-            if '=' not in second_arg:  # It's a key
-                if len(args) != 2:
-                    return "Invalid arguments for the get command."
-                
-                key = self.resolve_single_exp(second_arg)
-                obj = self.get_object(class_name, key)
-                if obj:
-                    return str(obj)
-                else:
-                    return f"No object of type {class_name} with key {key} found."
-            
-            else:  # It's an attribute/reference specification
-                if len(args) > 3:
-                    return "Invalid arguments for the get command."
-                
-                # Split attribute/reference name and value to look for
-                split_args = second_arg.split('=')
-                filter_args = {split_args[0]: self.resolve_single_exp(split_args[1])}
-                objects = self.find_objects(class_name, filter_args)
-                if not objects:
-                    return f"No objects of type {class_name} matching the criteria found."
-                
-                if len(args) == 3:  # If there's a list name provided
-                    list_name = self.resolve_single_exp(args[2])
-                    setattr(self.loaded_module, list_name, objects)
-                    return f"{len(objects)} objects of type {class_name} added to {list_name}."
-                else:
-                    return "\n".join([str(obj) for obj in objects])
-        elif isinstance(second_arg, List):
-            # It's a list of keys
-            if len(args) != 3:
-                return "Invalid arguments for the get command. Requires exactly three arguments if second argument is a list of keys."
-            
-            keys = [self.resolve_single_exp(key) for key in second_arg]
-            objects = self.get_multiple_objects([(class_name, key) for key in keys])
-            if not objects:
-                return f"No objects of type {class_name} found for the given keys."
+        if not objects:
+            return f"No objects of type {class_name} matching the criteria found."
 
-            list_name = self.resolve_single_exp(args[2])
-            setattr(self.loaded_module, list_name, objects)
+        # If only one object, store it directly. Otherwise, store as a list.
+        if len(objects) == 1:
+            self.execution_scope[list_name] = objects[0]
+            return f"Object of type {class_name} added as {list_name}."
+        else:
+            self.execution_scope[list_name] = objects
             return f"{len(objects)} objects of type {class_name} added to {list_name}."
 
-        return "Invalid arguments for the get command."
+    def process_create(self, command_str: str) -> str:
+        """
+        Processes a 'create' command to instantiate a new model object based on provided attributes.
 
+        Parameters:
+        - command_str (str): The command string, starting with the class name followed 
+                            by a series of attribute=value pairs.
 
-    def process_create(self, args: List[Union[str, List[str]]]) -> str:
+        Behavior:
+        1. Extracts the class name and validates its existence.
+        2. Processes the attribute=value pairs to construct the model object.
+        3. Calls the appropriate function (`self.create_object`) to instantiate the object.
+
+        Returns:
+        - A string message indicating the outcome of the command, which could be an error message, 
+        a help message, or a success message with a representation of the created object.
+        """
+        
+        # Split the arguments
+        args = command_str.split()
+
+        # Validate if the class name is provided and is known
         if not args:
             return "No arguments provided."
+        
         class_name = args[0]
         if class_name not in self.model_specs.get_class_names():
             return "Unknown Object Type."
-        if len(args) < 2:
-            return "Command requires at least 2 arguments. Call 'help create' for further information."
-        if args[1] == "-help":
+
+        # If only the class name is provided or if help is requested
+        if len(args) == 1 or args[1] == "-help":
             return "\n".join(self.model_specs.get_variable_summary(class_name))
+
+        # Process the attribute/reference specifications
         init_params = {}
         for arg in args[1:]:
-            parts = arg.split('=')
-            init_params[parts[0]] = self.resolve_single_exp(parts[1])
-        obj = self.create_object(class_name, init_params)
-        return str(obj)
+            key, value_str = arg.split("=", 1)
+            try:
+                value = self.execute_expression(value_str)
+                init_params[key] = value
+            except Exception as e:
+                return f"Error occurred during evaluation of {value_str}: {str(e)}"
 
-    def process_add(self, args: List[Union[str, List[str]]]) -> str:
-        if not args:
-            return "No arguments provided."
+        # Create the object
+        try:
+            obj = self.create_object(class_name, init_params)
+            return str(obj)
+        except Exception as e:
+            return f"Error occurred during object creation: {str(e)}"
 
-        # Resolve the provided expression to an object or list of objects
-        resolved_obj = self.resolve_single_exp(args[0])
+    def process_add(self, expression: str) -> str:
+        """
+        Processes an 'add' command to add an object or list of objects to the model.
+
+        Parameters:
+        - expression (str): A Python expression that evaluates to an object or a list of objects.
+
+        Behavior:
+        1. Evaluates the provided expression.
+        2. Checks if the resulting object (or objects) are of a known model object type.
+        3. Calls the appropriate function (`self.add_object` or `self.add_multiple_objects`) to add the object(s) to the model.
+
+        Returns:
+        - A string message indicating the outcome of the command, which could be an error message or a success message.
+        """
         
-        if isinstance(resolved_obj, list):
-            if self.add_multiple_objects(resolved_obj):
-                return "All objects added successfully."
-            return f"Failed to add list of objects."
-        else:
-            if self.add_object(resolved_obj):
-                return f"Object {resolved_obj} added successfully."
+        try:
+            # Evaluate the expression
+            result = self.execute_expression(expression)
+
+            valid_classes = self.model_specs.get_class_names()
+            # Check if the result is a list of known model objects
+            if isinstance(result, list) and all(type(item).__name__ in valid_classes for item in result):
+                if self.add_multiple_objects(result):
+                    return "All objects added successfully."
+                else:
+                    return "Failed to add list of objects."
+            
+            # Check if the result is a singular known model object
+            elif type(result).__name__ in valid_classes:
+                try:
+                    self.add_object(result)
+                    return f"Object {result} added successfully."
+                except Exception as e:
+                    return f"Failed to add object: {result}"
+
+            # If result is neither a list of known model objects nor a singular known model object
             else:
-                return f"Failed to add object: {resolved_obj}"
+                return f"Expression does not evaluate to a recognized model object or list of model objects."
 
-    def process_assign(self, args: List[Union[str, List[str]]]) -> str:
-        if len(args) < 2:
-            return "Command requires at least 2 arguments. Call 'help assign' for further information."
-
-        var_name = args[0]
-        expression = " ".join(args[1:])  # In case the expression was split into multiple args
-
-        # Evaluate the expression
-        try:
-            # get execution scope
-            self.execution_scope['self'] = self
-            value = eval(expression, self.execution_scope)
         except Exception as e:
-            return f"Error evaluating expression: {e}"
+            return f"Error occurred during evaluation: {str(e)}"
 
-        # Assign the value to the variable in the loaded_module context
-        setattr(self.loaded_module, var_name, value)
-        return f"Assigned {value} to {var_name}."
-
-    def process_eval(self, args: List[Union[str, List[str]]]) -> str:
-        expression = " ".join(args)  # In case the expression was split into multiple args
-
-        # Evaluate the expression
-        try:
-            # get execution scope
-            self.execution_scope['self'] = self
-            value = eval(expression, self.execution_scope)
-        except Exception as e:
-            return f"Error evaluating expression: {e}"
-        
-        return str(value)
-
-    def process_help(self, args: List[Union[str, List[str]]]) -> str:
-        valid_arguments = valid_commands[:-1]
-        if not args:
+    def process_help(self, command_str: str) -> str:
+        if not command_str:
             return command_help
-        
-        param = args[0].lower()
-        if param not in valid_arguments:
-            return "Unknown argument"
 
+        param = command_str.lower()
+        
         if param == "get":
             return """
 Usage for 'get' command:
-1. Get by key: get [class_name] [key]
-2. Get by property: get [class_name] [property=specific_value]
-3. Get multiple by keys: get [class_name] [comma-separated-keys] [name of list]
-4. Get multiple by property: get [class_name] [property=specific_value] [name of list]
-
-property refers to both attributes and relationships. can be specified directly as string or indirectly through variables, which get recognized by a leading $ (e.g., $variable, $type.key).
+> get [class_name] [attribute/reference=value] ... [attribute/reference=value] optional: as [name of return list]
+- Loads a model object or list of model objects of type class_name based on attribute/reference=value specifications. 
+- Results can optionally be stored under a specific name.
             """
-
+        
         elif param == "create":
             return """
 Usage for 'create' command:
-create [class_name] -help - Displays required and optional parameters for class_name.
-create [class_name] [attribute1=value1] ... [attributeN=valueN] - Create an object of type class_name with specified attributes.
+> create [class_name] -help
+- Displays required and optional parameters for class_name.
+> create [class_name] [attribute1=value1] ... [attributeN=valueN]
+- Creates a new model object with the specified parameters in both program context and persistent storage.
             """
-
+        
         elif param == "add":
             return """
 Usage for 'add' command:
-1. Add a single object: add [expression that evaluates to a model object]
-2. Add multiple objects: add [comma-separated list of model objects]
+> add [expression that evaluates to a model object or list of model objects]
+- Adds a model object or list of model objects created in program context to persistent storage.
             """
 
-        elif param == "assign":
-            return """
-Usage for 'assign' command:
-assign [variable_name] [expression] - Assigns the result of the expression to the specified variable.
-            """
+        else:
+            return f"Unknown help topic: {param}\r\n" + command_help
 
-        elif param == "eval":
-            return """
-Usage for 'eval' command:
-eval [expression] - Evaluates the provided expression and returns the result.
-            """
-        return "this should not be reachable"
 
     def gather_objects(self):
         response = {
@@ -1010,11 +1151,14 @@ eval [expression] - Evaluates the provided expression and returns the result.
             ]
         
         # Handle other runtime objects
-        for attr_name in dir(self.loaded_module):
+        for attr_name, value in self.execution_scope.items():
             if attr_name.startswith("_"):  # Exclude private members
                 continue
-            value = getattr(self.loaded_module, attr_name)
-            if isinstance(value, type) or isinstance(value, ABCMeta) or isinstance(value, _SpecialForm):
+            if attr_name == "self": # Exclude ModelInterpreter self
+                continue
+            if type(value).__name__ in ["type", "ABCMeta", "module", "function"]: # Exclude classes, modules and functions
+                continue
+            if str(value).startswith("typing."): # Exclude typing module members
                 continue
             obj_repr = {"name": attr_name}
             if isinstance(value, list):
@@ -1031,31 +1175,4 @@ eval [expression] - Evaluates the provided expression and returns the result.
                 response["runtime_objects"]["variables"].append(obj_repr)
         
         return response
-
-    def resolve_single_exp(self, expr: str):
-        if " " in expr:
-            raise ValueError("The expression should be a single word.")
-        
-        if expr.startswith("$"):
-            if '.' in expr:
-                type_name, key = expr[1:].split('.')
-                # Fetch from the respective register
-                register = self.get_register(type_name)
-                return register.get(key)
-            else:
-                # Fetch from module context
-                return getattr(self.loaded_module, expr[1:])
-        # Check for potential number values
-        try:
-            return int(expr)
-        except ValueError:
-            pass
-
-        try:
-            return float(expr)
-        except ValueError:
-            pass
-        
-        # If it's not recognized as a variable, object, integer, or float, return as string
-        return expr
     

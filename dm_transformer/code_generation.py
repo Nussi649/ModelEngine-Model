@@ -60,7 +60,7 @@ def generate_init(class_details: dict) -> List[str]:
                     f"{' ' * 12}if {attr} is None:",
                     f"{' ' * 12}    raise ValueError('Attribute {attr} is required')"
                 ])
-            init_lines.append(f"{' ' * 12}self.{attr} = {attr}")
+            init_lines.append(f"{' ' * 12}self.{attr}: {details['type']} = {attr}")
 
         # Check and assign references
         for ref, details in references.items():
@@ -69,10 +69,7 @@ def generate_init(class_details: dict) -> List[str]:
                     f"{' ' * 12}if {ref} is None:",
                     f"{' ' * 12}    raise ValueError('Reference {ref} is required')"
                 ])
-            if details["multiplicity"] == "multi":
-                init_lines.append(f"{' ' * 12}self.{ref}.extend({ref})")
-            else:
-                init_lines.append(f"{' ' * 12}self.{ref} = {ref}")
+            init_lines.append(f"{' ' * 12}self.{ref}: " + f"List ['{details['type']}']" if details['multiplicity'] == 'multi' else f"'{details['type']}'" + f" = {ref}")
 
     init_lines.append("")
     return init_lines
@@ -165,21 +162,18 @@ def generate_class_code(class_name: str, class_details: dict) -> str:
     # Add class definition line
     class_code = [f"class {class_name}({base_classes}):", ""]
 
-    # Define attributes with type annotations
-    for attr, details in attributes.items():
-        if attr != key_name:  # Skip the key attribute
-            class_code.append(f"{' ' * 4}{generate_attribute_code(attr, details)}")
-
-    # Define references with type annotations
-    for ref, details in references.items():
-        class_code.append(f"{' ' * 4}{generate_reference_code(ref, details)}")
-
-    if attributes or references:
-        # Add empty line after variable definition
-        class_code.append('')
-
     # only add constructor if class is not abstract
-    if class_details['is_abstract']:
+    if class_details['is_abstract']:    
+        # Define attributes with type annotations
+        for attr, details in attributes.items():
+            class_code.append(f"{' ' * 4}{generate_attribute_code(attr, details)}")
+        # Define references with type annotations
+        for ref, details in references.items():
+            class_code.append(f"{' ' * 4}{generate_reference_code(ref, details)}")
+
+        if attributes or references:
+            # Add empty line after variable definition
+            class_code.append('')
         return "\n".join(class_code)
 
     # Generate list of constructor params (all optional - generator functions handle required checks)

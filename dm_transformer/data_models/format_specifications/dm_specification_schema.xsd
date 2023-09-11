@@ -48,6 +48,7 @@
             <xs:enumeration value="text"/>
             <xs:enumeration value="int"/>
             <xs:enumeration value="float"/>
+            <xs:enumeration value="boolean"/>
             <xs:enumeration value="datetime"/>
             <xs:enumeration value="pos_geo"/>
         </xs:restriction>

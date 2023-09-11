@@ -1,0 +1,18 @@
+<Classes>
+    <Class name="AssetAccount">
+        <Collection>Account</Collection>
+        <Attribute type="text" is_key="true" required="true">name</Attribute>
+        <Reference type="Tx" multiplicity="multi" required="false">transactions</Reference>
+    </Class>
+    <Class name="BudgetAccount">
+        <Collection>Account</Collection>
+        <Attribute type="text" is_key="true" required="true">name</Attribute>
+        <Attribute type="float">yearly_budget</Attribute>
+        <Reference type="Tx" multiplicity="multi" required="false">transactions</Reference>
+    </Class>
+    <Class name="Tx">
+        <Collection>Base</Collection>
+        <Attribute type="text" is_key="true" required="true">name</Attribute>
+        <Reference type="Unit" multiplicity="mono" required="true">unit_default</Reference>
+    </Class>
+</Classes>

@@ -96,18 +96,24 @@ function updateObjectsTable(objects) {
         const row = variablesTable.insertRow();
         const cell1 = row.insertCell(0);
         const cell2 = row.insertCell(1);
-        cell1.textContent = varObj.name;
-        cell2.textContent = `${varObj.type}: ${varObj.content}`;
+        cell1.textContent = `${varObj.name} (${varObj.type})`;
+        cell2.textContent = varObj.content;
     }
 
     // Check and reveal divs if they have data
     if ($("#lists-table tbody tr").length > 0) {
-        $("#lists-div").show();
+        $("#lists-section").show();
+    } else {
+        $("#lists-section").hide();
     }
     if ($("#dicts-table tbody tr").length > 0) {
-        $("#dicts-div").show();
+        $("#dicts-section").show();
+    } else {
+        $("#dicts-section").hide();
     }
     if ($("#variables-table tbody tr").length > 0) {
-        $("#variables-div").show();
+        $("#variables-section").show();
+    } else {
+        $("#variables-section").hide();
     }
 }

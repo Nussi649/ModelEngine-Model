@@ -72,7 +72,7 @@ def process_file(input_path: str, output_path: str):
 if __name__ == "__main__":
     #script_directory = os.path.dirname(os.path.abspath(__file__))
     #in_path = os.path.join(script_directory, "datamodels", "ResourceTransmission_v1.xml")
-    in_path = "data_models/ResourceTransmission_v1.xml"
-    out_path = "../model_code/test.py"
+    in_path = "dm_transformer/data_models/FinanceHelper.xml"
+    out_path = "dm_transformer/data_models/model_code/FinanceHelper.py"
 
     process_file(in_path, out_path)

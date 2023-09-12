@@ -22,7 +22,7 @@ def attribute_type_to_annotation(attr_type: str) -> str:
 class ModelSpecifications:
 
 # region Setup
-    def __init__(self, xml_path=None, xml_content=None, xsd_path="data_models/format_specifications/dm_specification_schema.xsd"):
+    def __init__(self, xml_path=None, xml_content=None, xsd_path="dm_transformer/data_models/format_specifications/dm_specification_schema.xsd"):
         """
         Constructor for the DataModelService.
 

@@ -12,7 +12,7 @@ app = Flask(__name__, template_folder="templates")
 URI = "neo4j://neo4j:7687"
 AUTH = ("neo4j", os.getenv("NEO4J_PASSWORD"))
 RESET_PASSWORD ="K€N0Bi"
-MODEL_INTERPRETER = ModelInterpreter(URI, AUTH, "NumberTheory.py")
+MODEL_INTERPRETER = ModelInterpreter(URI, AUTH, "FinanceHelper.py")
 
 # Function to handle terminal input
 def terminal_input():

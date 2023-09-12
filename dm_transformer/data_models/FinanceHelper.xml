@@ -7,12 +7,14 @@
     <Class name="BudgetAccount">
         <Collection>Account</Collection>
         <Attribute type="text" is_key="true" required="true">name</Attribute>
-        <Attribute type="float">yearly_budget</Attribute>
+        <Attribute type="float" required="false">yearly_budget</Attribute>
         <Reference type="Tx" multiplicity="multi" required="false">transactions</Reference>
     </Class>
     <Class name="Tx">
         <Collection>Base</Collection>
-        <Attribute type="text" is_key="true" required="true">name</Attribute>
-        <Reference type="Unit" multiplicity="mono" required="true">unit_default</Reference>
+        <Attribute type="text" is_key="true" required="true">identifier</Attribute>
+        <Attribute type="text" required="true">description</Attribute>
+        <Attribute type="float" required="true">amount</Attribute>
+        <Attribute type="datetime" required="true">time</Attribute>
     </Class>
 </Classes>

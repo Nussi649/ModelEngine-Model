@@ -31,7 +31,7 @@ def generate_init(class_details: dict) -> List[str]:
         "self",
         *[f"{attr}: {details['type']}=None" for attr, details in attributes.items()],
         *[
-            f"{ref}: List['{ref_details['type']}']=None" if ref_details['multiplicity'] == 'multi' 
+            f"{ref}: List['{ref_details['type']}']=[]" if ref_details['multiplicity'] == 'multi' 
             else f"{ref}: '{ref_details['type']}'=None" 
             for ref, ref_details in references.items()
         ]
@@ -66,10 +66,10 @@ def generate_init(class_details: dict) -> List[str]:
         for ref, details in references.items():
             if details.get("required"):
                 init_lines.extend([
-                    f"{' ' * 12}if {ref} is None:",
+                    f"{' ' * 12}if not {ref}:",
                     f"{' ' * 12}    raise ValueError('Reference {ref} is required')"
                 ])
-            init_lines.append(f"{' ' * 12}self.{ref}: " + f"List ['{details['type']}']" if details['multiplicity'] == 'multi' else f"'{details['type']}'" + f" = {ref}")
+            init_lines.append(f"{' ' * 12}self.{ref}: " + (f"List ['{details['type']}']" if details['multiplicity'] == 'multi' else f"'{details['type']}'") + f" = {ref}")
 
     init_lines.append("")
     return init_lines

@@ -1,11 +1,13 @@
 import importlib.util
 import re
+import os
 import sys
 import random
 import string
 import inspect
 import json
 from abc import ABC, ABCMeta
+from datetime import datetime
 from neo4j import GraphDatabase
 from types import ModuleType
 from pathlib import Path
@@ -20,7 +22,7 @@ get_object_query = """
     RETURN n, collect(r) as relationships, collect(related) as related_nodes
     """
 
-valid_commands = ["get", "create", "add", "help"]
+valid_commands = ["get", "create", "add", "io", "help"]
 
 known_dicts = ["INVERSE_RELATIONSHIPS", "register"]
 
@@ -75,7 +77,7 @@ class ModelInterpreter:
         if model_code is not None:
             self.init_module(self.load_model_code(model_code))
         # Load and parse the specifications file
-        self.model_specs = ModelSpecifications(xml_path="/workspace/data_models/NumberTheory.xml",
+        self.model_specs = ModelSpecifications(xml_path="/workspace/data_models/FinanceHelper.xml",
                                                xsd_path="/workspace/data_models/format_specifications/dm_specification_schema.xsd")
 
     @property
@@ -264,7 +266,16 @@ class ModelInterpreter:
         return references
 
     def _construct_create_query(self, class_name, attrs, refs):
-        node_attrs = ", ".join(f"{k}: {json.dumps(v)}" for k, v in attrs.items())
+        node_attrs_list = []
+        for k, v in attrs.items():
+            if isinstance(v, datetime):
+                formatted_datetime = v.isoformat()
+                node_attr = f'{k}: datetime("{formatted_datetime}")'
+            else:
+                node_attr = f"{k}: {json.dumps(v)}"
+            node_attrs_list.append(node_attr)
+
+        node_attrs = ", ".join(node_attrs_list)
         query = [f"CREATE (a:{class_name} {{ {node_attrs} }})"]
         expected_rel_created = 0
 
@@ -925,6 +936,8 @@ class ModelInterpreter:
             return self.process_create(arguments)
         elif command == "get":
             return self.process_get(arguments)
+        elif command == "io":
+            return self.process_io(arguments)
         elif command == "help":
             return self.process_help(arguments)
         return f"Unknown command: {command}"
@@ -1097,6 +1110,47 @@ class ModelInterpreter:
 
         except Exception as e:
             return f"Error occurred during evaluation: {str(e)}"
+        
+    def process_io(self, command: str) -> str:
+        """
+        Process IO commands related to the payload bay.
+
+        Args:
+            command (str): The input command string.
+
+        Returns:
+            str: The result or response to the command.
+        """
+
+        # Split the command into parts
+        parts = command.split()
+
+        # Check for valid commands
+        if not parts:
+            return "Invalid IO command."
+
+        action = parts[0]
+
+        # Handle 'list' action
+        if action == "list":
+            return self._list_payload_bay()
+
+        # Handle 'read' action
+        elif action == "read":
+            filename = parts[1]
+            var_name = parts[-1] if parts[-2] == "as" else None
+            if len(parts) % 2 == 0:
+                return self._read_file_to_variable(filename, var_name)
+            else:
+                class_method_str = parts[2]
+                return self._read_and_process_file(filename, class_method_str, var_name)
+
+        # Handle 'write' action (if you decide to implement it later)
+        # elif action == "write":
+        #     # Implementation here
+
+        else:
+            return "Unknown IO action."
 
     def process_help(self, command_str: str) -> str:
         if not command_str:
@@ -1175,4 +1229,79 @@ Usage for 'add' command:
                 response["runtime_objects"]["variables"].append(obj_repr)
         
         return response
+
+    def _list_payload_bay(self) -> str:
+        """
+        List the files in the payload bay.
+
+        Returns:
+            str: List of files in the payload bay.
+        """
+        files = os.listdir("payload_bay")
+        if not files:
+            return "Payload bay is empty."
+        return "\n".join(files)
+
+    def _read_file_to_variable(self, filename: str, var_name: str = None) -> str:
+        """
+        Read the file content and store it in a variable.
+
+        Args:
+            filename (str): Name of the file.
+            var_name (str, optional): Name of the variable to store the content. Defaults to filename.
+
+        Returns:
+            str: Confirmation message.
+        """
+        with open(os.path.join("payload_bay", filename), 'r') as file:
+            content = file.read()
+        
+        var_name = var_name or filename
+        # Store the content in a variable
+        self.execution_scope[var_name] = content
+        
+        return f"Content of {filename} has been stored in variable: {var_name}"
     
+    def _read_and_process_file(self, filename: str, function_str: str, var_name: str = None) -> str:
+        """
+        Read the file content and process it using the specified class method.
+
+        Args:
+            filename (str): Name of the file.
+            function_str (str): String representation of the function or class method to process the content.
+            var_name (str, optional): Name of the variable to store the content. Defaults to filename.
+
+        Returns:
+            str: Result after processing the content.
+        """
+        # Check if function_str contains '.' indicating it's a class method
+        if '.' in function_str:
+            class_name, method_name = function_str.split('.')
+            
+            # Get the class and method from the loaded module
+            target_class = getattr(self.loaded_module, class_name, None)
+            if not target_class:
+                return f"Error: {class_name} not found."
+            
+            target_function = getattr(target_class, method_name, None)
+            if not target_function:
+                return f"Error: {function_str} not found."
+        else:
+            # It's a function directly in the loaded module
+            target_function = getattr(self.loaded_module, function_str, None)
+            
+            if not target_function:
+                return f"Error: {function_str} not found."
+
+        with open(os.path.join("payload_bay", filename), 'r') as file:
+            content = file.read()
+
+        # Process the content using the target function
+        result = target_function(content)
+
+        # calculate var name
+        var_name = var_name if var_name else filename
+        # Store the result in a runtime variable
+        self.execution_scope[var_name] = result
+
+        return f"Processed content of {filename} using {function_str} and stored the result in variable: {var_name}"

@@ -1,19 +1,11 @@
-import importlib.util
-import re
-import os
-import sys
-import random
-import string
-import inspect
 import json
-from abc import ABC, ABCMeta
-from datetime import datetime
+from src.runtime_manager import RuntimeManager, ModuleUnavailableError
+from src.dm_specs import ModelSpecifications
 from neo4j import GraphDatabase
-from types import ModuleType
-from pathlib import Path
 from collections import defaultdict
-from dm_specs import ModelSpecifications
-from typing import _SpecialForm, List, Tuple, Any, Union, get_args, get_type_hints
+from typing import List, Tuple, Any
+from datetime import datetime
+
 
 create_object_query = "CREATE (n:{class_name}) SET n = $attributes"
 get_object_query = """
@@ -22,63 +14,15 @@ get_object_query = """
     RETURN n, collect(r) as relationships, collect(related) as related_nodes
     """
 
-valid_commands = ["get", "create", "add", "io", "help"]
 
-known_dicts = ["INVERSE_RELATIONSHIPS", "register"]
-
-command_help = """
-_______ Command Usage _______
-
-- Any input is directly evaluated as a Python expression unless it starts with the '>' character.
-- Expressions starting with '>' are treated as special commands.
-
-_______ Available Commands _______
-
-> help [command] - Provides further information about the usage of each command.
-
-> get [class_name] [attribute/reference=value] ... [attribute/reference=value] optional: as [name of return list] 
-    - Loads a model object or list of model objects of type class_name based on attribute/reference=value specifications. 
-    - Results can optionally be stored under a specific name.
-
-> create [class_name] -help 
-    - Provides information about the required and optional parameters for a specific class.
-
-> create [class_name] [attribute/reference=value] ... [attribute/reference=value] 
-    - Creates a new model object with the specified parameters in both program context and persistent storage.
-
-> add [expression that evaluates to a model object or list of model objects] 
-    - Adds a model object or list of model objects created in program context to persistent storage.
-
-_______ Referring to Model Objects _______
-
-- To refer to a specific model object within an expression, use the format: @Class.Key
-- This format can be used anywhere within your expression to fetch and utilize model objects.
-
-"""
-
-
-BASIC_TYPES = {float, int, str}
-
-class ModuleUnavailableError(RuntimeError):
-    pass
-
-class ModelInterpreter:
-    loaded_module: ModuleType
-    driver: GraphDatabase.driver
-    execution_scope: dict
-    class_types: dict
-
-# region Constructor and @property Attributes
-
-    def __init__(self, URI: str, AUTH: tuple, model_code=None):
+class ModelDB:
+    def __init__(self, model_specs: ModelSpecifications, runtime_manager: RuntimeManager, URI: str, AUTH: tuple):
         self._URI = URI
         self._AUTH = AUTH
+        self.model_specs = model_specs
+        self.runtime = runtime_manager
+        self.runtime.set_to_scope("__get_model_object__", self.get_object)
         self.driver = GraphDatabase.driver(URI, auth=AUTH)
-        if model_code is not None:
-            self.init_module(self.load_model_code(model_code))
-        # Load and parse the specifications file
-        self.model_specs = ModelSpecifications(xml_path="/workspace/data_models/FinanceHelper.xml",
-                                               xsd_path="/workspace/data_models/format_specifications/dm_specification_schema.xsd")
 
     @property
     def URI(self):
@@ -88,58 +32,157 @@ class ModelInterpreter:
     def AUTH(self):
         return self._AUTH
 
-# endregion
-    
+    def close(self):
+        """
+        Close the Neo4j database connection.
+        """
+        self.driver.close()
+
 # region Helper functions
 
-    def load_model_code(self, file_name: str) -> ModuleType:
-        file_path = Path('/workspace/data_models/model_code') / file_name
-
-        if not file_path.exists():
-            raise FileNotFoundError(f"{file_path} does not exist.")
-
-        # Constructing the module spec
-        spec = importlib.util.spec_from_file_location(file_name, file_path)
-
-        # Creating a new module based on the spec
-        module = importlib.util.module_from_spec(spec)
-
-        # Executing the module
-        spec.loader.exec_module(module)
-
-        # Adding the module to the system modules
-        sys.modules[spec.name] = module
-
-        return module
-    
-    def init_module(self, module: ModuleType):
-        self.loaded_module = module
-        ## Iterate through all the attributes of the loaded module
-        #for name, obj in inspect.getmembers(self.loaded_module):
-        #    # Check if the object is a class
-        #    if inspect.isclass(obj):
-        #        # Check if the class is not abstract
-        #        if not issubclass(obj, ABC):
-        #            # Create a dictionary with the desired name
-        #            dict_name = f"objects_{name}"
-        #            setattr(self.loaded_module, dict_name, {})
-        self.execution_scope = dict(self.loaded_module.__dict__)
+    def get_type_register(self, class_name: str):
+        """
+        Get the type-specific register for a given class name.
+        """
+        return self.runtime.get_type_register(class_name)
 
     def resolve_class_name(self, class_name):
-        if self.loaded_module is None:
+        if not self.runtime.get_status():
             raise ModuleUnavailableError("No model code loaded.")
         if class_name not in self.model_specs.classes:
             raise ValueError(f"Class {class_name} not recognized.")
-        return getattr(self.loaded_module, class_name)
+        return self.runtime.get_attr(class_name)
+
+    def _objects_match(self, obj1, obj2) -> bool:
+        """
+        Check if two objects match in every attribute and reference.
+        """
+        attrs = self.model_specs.get_attributes(type(obj1).__name__)
+        refs = self.model_specs.get_references(type(obj1).__name__)
+        
+        for attr in attrs:
+            if getattr(obj1, attr) != getattr(obj2, attr):
+                return False
+
+        for ref in refs:
+            if getattr(obj1, ref) != getattr(obj2, ref):
+                return False
+
+        return True
     
-    def get_register(self, class_name: str):
-        general_register = getattr(self.loaded_module, "register")
-        register = general_register.get(class_name, None)
-        if not register:
-            general_register[class_name] = {}
-            register = general_register[class_name]
-        return register
+    def _fetch_references_from_records(self, class_name, records):
+        references = {}
+        register_cache = {}  # Cache for object registers
+
+        for record in records:
+            relationship = record.get('relationship_type')
+            rel_node = record.get('related_node_properties')
+            if not relationship or not rel_node:
+                continue
+            
+            relationship = relationship.lower()
+            rel_class_name = self.model_specs.get_reference_type(class_name, relationship)
+            if rel_class_name not in register_cache:
+                register_cache[rel_class_name] = self.get_type_register(rel_class_name)
+            
+            related_obj = register_cache[rel_class_name].get(rel_node['key'])
+            if not related_obj:
+                related_class = self.resolve_class_name(rel_class_name)
+                related_obj = related_class.create_reduced(rel_node['key'])
+                register_cache[rel_class_name][rel_node['key']] = related_obj
+            
+            if self.model_specs.is_multi_reference(class_name, relationship):
+                references.setdefault(relationship, []).append(related_obj)
+            else:
+                references[relationship] = related_obj
+
+        return references
+
+    def _construct_create_query(self, class_name, attrs, refs):
+        node_attrs_list = []
+        for k, v in attrs.items():
+            if isinstance(v, datetime):
+                formatted_datetime = v.isoformat()
+                node_attr = f'{k}: datetime("{formatted_datetime}")'
+            else:
+                node_attr = f"{k}: {json.dumps(v)}"
+            node_attrs_list.append(node_attr)
+
+        node_attrs = ", ".join(node_attrs_list)
+        query = [f"CREATE (a:{class_name} {{ {node_attrs} }})"]
+        expected_rel_created = 0
+
+        if any(ref_data for ref_data in refs.values()):
+            for rel_name, rel_data in refs.items():
+                relationship_type = rel_name.upper()
+                inv_rel_type = self.runtime.get_from_scope("INVERSE_RELATIONSHIPS").get(rel_name, "").upper()
+
+                # Check if rel_data is a list (indicating multi-reference)
+                if isinstance(rel_data, list):
+                    for item in rel_data:
+                        related_class_name = type(item).__name__
+                        related_key = item.key
+                        query.append("WITH a")
+                        query.append(f"MATCH (b_{rel_name}:{related_class_name} {{key: '{related_key}'}})")
+                        query.append(f"CREATE (a)-[:{relationship_type}]->(b_{rel_name})")
+                        expected_rel_created += 1
+                        if inv_rel_type:
+                            query.append(f"CREATE (b_{rel_name})-[:{inv_rel_type}]->(a)")
+                            expected_rel_created += 1
+
+                else:  # Single reference
+                    if isinstance(rel_data, dict):
+                        related_class_name = rel_data['class_name']
+                        related_key = rel_data['key']
+                    else:  # It's an object
+                        related_class_name = type(rel_data).__name__
+                        related_key = rel_data.key
+
+                    query.append("WITH a")
+                    query.append(f"MATCH (b_{rel_name}:{related_class_name} {{key: '{related_key}'}})")
+                    query.append(f"CREATE (a)-[:{relationship_type}]->(b_{rel_name})")
+                    expected_rel_created += 1
+                    if inv_rel_type:
+                        query.append(f"CREATE (b_{rel_name})-[:{inv_rel_type}]->(a)")
+                        expected_rel_created += 1
+
+        return "\n".join(query), expected_rel_created
     
+    def _construct_update_node_query(self, class_name, key, attrs):
+        set_clause = ", ".join(f"n.{attr_name} = ${attr_name}" for attr_name in attrs.keys())
+        query = f"""
+        MATCH (n:{class_name})
+        WHERE n.key = $key
+        SET {set_clause}
+        """
+        query_params = {"key": key, **attrs}
+        return query, query_params
+
+    def _construct_update_relationships_query(self, class_name, key, refs):
+        detach_queries = []
+        attach_queries = []
+        for rel_name, rel_object in refs.items():
+            relationship_type = rel_name.upper()
+            related_class_name = type(rel_object).__name__
+            inv_rel_type = self.runtime.get_from_scope("INVERSE_RELATIONSHIPS").get(rel_name, "").upper()
+
+            detach_queries.append(f"""
+            MATCH (a:{class_name} {{key: '{key}'}})-[r:{relationship_type}]->(b)
+            DELETE r""")
+            if inv_rel_type:
+                detach_queries.append(f"""
+                OPTIONAL MATCH (b)-[r_inv:{inv_rel_type}]->(a) DELETE r_inv""")
+            
+            attach_queries.append(f"""
+            MATCH (a:{class_name} {{key: '{key}'}})
+            MATCH (b:{related_class_name} {{key: '{rel_object.key}'}})
+            MERGE (a)-[:{relationship_type}]->(b)""")
+            if inv_rel_type:
+                attach_queries.append(f"""
+                MERGE (b)-[:{inv_rel_type}]->(a)""")
+
+        return "\n".join(detach_queries), "\n".join(attach_queries)
+
     def object_from_node(self, class_name, node, records=None, reduced_object=None):
         """
         Constructs a full Python object from a Neo4j node.
@@ -161,7 +204,7 @@ class ModelInterpreter:
         key = node['key']
         custom_key = self.model_specs.get_key_attribute(class_name)
 
-        register = self.get_register(class_name)
+        register = self.get_type_register(class_name)
         obj = register.get(key, None)
         if reduced_object and obj:
             assert reduced_object == obj, f"Found two different objects for class {class_name} with key {key}. This should not happen."
@@ -219,137 +262,8 @@ class ModelInterpreter:
         except Exception as e:
             # TODO: Handle the error robustly
             raise e
-        
-    def _objects_match(self, obj1, obj2) -> bool:
-        """
-        Check if two objects match in every attribute and reference.
-        """
-        attrs = self.model_specs.get_attributes(type(obj1).__name__)
-        refs = self.model_specs.get_references(type(obj1).__name__)
-        
-        for attr in attrs:
-            if getattr(obj1, attr) != getattr(obj2, attr):
-                return False
-
-        for ref in refs:
-            if getattr(obj1, ref) != getattr(obj2, ref):
-                return False
-
-        return True
-    
-    def _fetch_references_from_records(self, class_name, records):
-        references = {}
-        register_cache = {}  # Cache for object registers
-
-        for record in records:
-            relationship = record.get('relationship_type')
-            rel_node = record.get('related_node_properties')
-            if not relationship or not rel_node:
-                continue
             
-            relationship = relationship.lower()
-            rel_class_name = self.model_specs.get_reference_type(class_name, relationship)
-            if rel_class_name not in register_cache:
-                register_cache[rel_class_name] = self.get_register(rel_class_name)
-            
-            related_obj = register_cache[rel_class_name].get(rel_node['key'])
-            if not related_obj:
-                related_class = self.resolve_class_name(rel_class_name)
-                related_obj = related_class.create_reduced(rel_node['key'])
-                register_cache[rel_class_name][rel_node['key']] = related_obj
-            
-            if self.model_specs.is_multi_reference(class_name, relationship):
-                references.setdefault(relationship, []).append(related_obj)
-            else:
-                references[relationship] = related_obj
-
-        return references
-
-    def _construct_create_query(self, class_name, attrs, refs):
-        node_attrs_list = []
-        for k, v in attrs.items():
-            if isinstance(v, datetime):
-                formatted_datetime = v.isoformat()
-                node_attr = f'{k}: datetime("{formatted_datetime}")'
-            else:
-                node_attr = f"{k}: {json.dumps(v)}"
-            node_attrs_list.append(node_attr)
-
-        node_attrs = ", ".join(node_attrs_list)
-        query = [f"CREATE (a:{class_name} {{ {node_attrs} }})"]
-        expected_rel_created = 0
-
-        if any(ref_data for ref_data in refs.values()):
-            for rel_name, rel_data in refs.items():
-                relationship_type = rel_name.upper()
-                inv_rel_type = self.loaded_module.INVERSE_RELATIONSHIPS.get(rel_name, "").upper()
-
-                # Check if rel_data is a list (indicating multi-reference)
-                if isinstance(rel_data, list):
-                    for item in rel_data:
-                        related_class_name = type(item).__name__
-                        related_key = item.key
-                        query.append("WITH a")
-                        query.append(f"MATCH (b_{rel_name}:{related_class_name} {{key: '{related_key}'}})")
-                        query.append(f"CREATE (a)-[:{relationship_type}]->(b_{rel_name})")
-                        expected_rel_created += 1
-                        if inv_rel_type:
-                            query.append(f"CREATE (b_{rel_name})-[:{inv_rel_type}]->(a)")
-                            expected_rel_created += 1
-
-                else:  # Single reference
-                    if isinstance(rel_data, dict):
-                        related_class_name = rel_data['class_name']
-                        related_key = rel_data['key']
-                    else:  # It's an object
-                        related_class_name = type(rel_data).__name__
-                        related_key = rel_data.key
-
-                    query.append("WITH a")
-                    query.append(f"MATCH (b_{rel_name}:{related_class_name} {{key: '{related_key}'}})")
-                    query.append(f"CREATE (a)-[:{relationship_type}]->(b_{rel_name})")
-                    expected_rel_created += 1
-                    if inv_rel_type:
-                        query.append(f"CREATE (b_{rel_name})-[:{inv_rel_type}]->(a)")
-                        expected_rel_created += 1
-
-        return "\n".join(query), expected_rel_created
-    
-    def _construct_update_node_query(self, class_name, key, attrs):
-        set_clause = ", ".join(f"n.{attr_name} = ${attr_name}" for attr_name in attrs.keys())
-        query = f"""
-        MATCH (n:{class_name})
-        WHERE n.key = $key
-        SET {set_clause}
-        """
-        query_params = {"key": key, **attrs}
-        return query, query_params
-
-    def _construct_update_relationships_query(self, class_name, key, refs):
-        detach_queries = []
-        attach_queries = []
-        for rel_name, rel_object in refs.items():
-            relationship_type = rel_name.upper()
-            related_class_name = type(rel_object).__name__
-            inv_rel_type = self.loaded_module.INVERSE_RELATIONSHIPS.get(rel_name, "").upper()
-
-            detach_queries.append(f"""
-            MATCH (a:{class_name} {{key: '{key}'}})-[r:{relationship_type}]->(b)
-            DELETE r""")
-            if inv_rel_type:
-                detach_queries.append(f"""
-                OPTIONAL MATCH (b)-[r_inv:{inv_rel_type}]->(a) DELETE r_inv""")
-            
-            attach_queries.append(f"""
-            MATCH (a:{class_name} {{key: '{key}'}})
-            MATCH (b:{related_class_name} {{key: '{rel_object.key}'}})
-            MERGE (a)-[:{relationship_type}]->(b)""")
-            if inv_rel_type:
-                attach_queries.append(f"""
-                MERGE (b)-[:{inv_rel_type}]->(a)""")
-
-        return "\n".join(detach_queries), "\n".join(attach_queries)
-# endregion                    
+# endregion           
 
 # region CRUD related
 
@@ -367,7 +281,7 @@ class ModelInterpreter:
         Returns:
             Object of type class_name if it exists, None otherwise
         """
-        register = self.get_register(class_name)
+        register = self.get_type_register(class_name)
 
         # Check if object is available in loaded context aka object register
         obj = register.get(key, None)
@@ -402,7 +316,7 @@ class ModelInterpreter:
         with self.driver.session() as session:
             tx = session.begin_transaction()
             for class_name, keys in grouped_pairs.items():
-                register = self.get_register(class_name)
+                register = self.get_type_register(class_name)
                 for key in keys:
                     # check register if the object is already loaded
                     obj = register.get(key)
@@ -469,7 +383,7 @@ class ModelInterpreter:
 
             for node in nodes_to_process:
                 key = node['key']
-                register = self.get_register(class_name)
+                register = self.get_type_register(class_name)
                 obj = register.get(key, None)
 
                 # Check register and handle object
@@ -499,7 +413,7 @@ class ModelInterpreter:
         # -- Gather local variables, validate parameters, check for target object in register --
         target_class = self.resolve_class_name(class_name)
         key_name = self.model_specs.get_key_attribute(class_name)
-        register = self.get_register(class_name)
+        register = self.get_type_register(class_name)
 
         key_value = args.get('key', args.get(key_name))
         if not key_value:
@@ -735,7 +649,7 @@ class ModelInterpreter:
                         raise ValueError(f"Unexpected Error: while post-processing the {ref_name} reference of {str(obj_instance)} the expected object {str(ref_value)} could not be acquired. Aborting...")
             
             # Put added object in register
-            self.get_register(class_name)[obj_instance.key] = obj_instance
+            self.get_type_register(class_name)[obj_instance.key] = obj_instance
         if tx:
             core_logic(tx)
         else:
@@ -754,7 +668,7 @@ class ModelInterpreter:
             except Exception as e:
                 print(f"Failed to add objects due to: {e}")
                 # If an exception happened, rollback changes by removing added objects from register
-                register = self.execution_scope["register"]
+                register = self.runtime.get_register()
                 for obj in added_objects:
                     del register[type(obj).__name__][obj.key]
                 return False
@@ -809,7 +723,7 @@ class ModelInterpreter:
             raise RuntimeError(f"Failed to delete object of type {class_name} with key {key}.")
         
         # 4. Delete from Register
-        register = self.get_register(class_name)
+        register = self.get_type_register(class_name)
         register.pop(key, None)  # Deletes the object if exists, otherwise does nothing
         
         return f"Object of type {class_name} with key {key} successfully deleted."
@@ -874,434 +788,3 @@ class ModelInterpreter:
         return cloned_obj
 
 # endregion
-
-##########################
-### REQUEST PROCESSING ###
-##########################
-
-    def _generate_response(self, message: str):
-        return {"result": str(message), "objects": self.gather_objects()}
-
-    def _interpret_input(self, input_str):
-        # Recognize all @Class.Key mentions and replace accordingly
-        pattern = r'@([\w]+)\.([\w]+)(?=\W|$)'  # This regex captures @Class.Key
-        replacement = "self.get_object('\\1', '\\2')"  # Replacement pattern for the recognized mentions
-
-        interpreted_input = re.sub(pattern, replacement, input_str)
-        return interpreted_input
-
-    def _generate_random_name(self, length=8):
-        # Generate a random name for storing the result if no name is provided
-        return ''.join(random.choice(string.ascii_lowercase) for _ in range(length))
-
-    def process_request(self, input_str: str):
-        # Check if the input starts with a special command indicator ('>')
-        if input_str.startswith('>'):
-            result = self.process_command(input_str[1:].strip())  # Remove the '>' and pass the rest
-        else:
-            try:
-                result = self.execute_expression(input_str)
-            except Exception as e:
-                result = f"Error occurred during execution of {input_str}:\r\n{str(e)}"
-        return self._generate_response(str(result))
-
-    def execute_expression(self, expression: str):
-        exp = self._interpret_input(expression)
-        # get execution scope
-        self.execution_scope['self'] = self
-        # If the expression contains '=', assume it's an assignment and use exec
-        if '=' in exp:
-            # Execute the assignment - TODO: make robust against malicious code execution
-            exec(exp, self.execution_scope)
-            # Parse the variable name and retrieve its value
-            var_name = expression.split('=')[0].strip()
-            result = self.execution_scope.get(var_name)
-        else:
-            # Otherwise, assume it's an expression and use eval
-            result = eval(exp, self.execution_scope)
-        return result
-
-    def process_command(self, command_str):
-        # Split the input to identify the command and its arguments
-        parts = command_str.split(maxsplit=1)  # maxsplit ensures only the first space is considered
-        command = parts[0]
-        if not command in valid_commands:
-            return f"Unknown command: {command}"
-        arguments = parts[1] if len(parts) > 1 else ""
-
-        # Determine which command to process
-        if command == "add":
-            return self.process_add(arguments)
-        elif command == "create":
-            return self.process_create(arguments)
-        elif command == "get":
-            return self.process_get(arguments)
-        elif command == "io":
-            return self.process_io(arguments)
-        elif command == "help":
-            return self.process_help(arguments)
-        return f"Unknown command: {command}"
-
-    def process_get(self, command_str: str) -> str:
-        """
-        Processes a 'get' command to retrieve model objects based on specified attributes.
-
-        Parameters:
-        - command_str (str): The command string, starting with the class name followed 
-                            by a series of attribute=value pairs, optionally ending with 
-                            'as <name>' to specify the name of the list or variable under 
-                            which the result should be stored.
-
-        Behavior:
-        1. If the command contains only the class name and "-help", it returns a summary of 
-        the available variables for that class.
-        2. The command then processes the attribute=value pairs to build the filter criteria.
-        3. If the keyword 'as' is encountered, the subsequent word is used as the name under 
-        which the result will be stored. If not provided, a random name is generated.
-        4. The command attempts to fetch model objects based on the filter criteria.
-        5. If only one object is fetched, it is stored directly under the specified or 
-        generated name. If multiple objects are fetched, they are stored as a list.
-
-        Returns:
-        - A string message indicating the outcome of the command, which could be an error 
-        message, a summary of available variables, or a success message detailing the 
-        number of objects retrieved and their storage name.
-
-        Example usage:
-        > get ClassName attribute1=value1 attribute2=value2 as result_name
-        > get ClassName -help
-        """
-        # Split the arguments
-        args = command_str.split()
-
-        # Validate if the class name is provided
-        if not args:
-            return "Please specify the class name and the attributes to get an object."
-
-        class_name = args[0]
-
-        if len(args) > 1 and args[1] == "-help":
-            return "\n".join(self.model_specs.get_variable_summary(class_name))
-
-        # Process the attribute/reference specifications
-        filter_args = {}
-        list_name = None
-        for arg in args[1:]:
-            if arg == "as":
-                # The next argument should be the name of the list
-                try:
-                    list_name = args[args.index(arg) + 1]
-                except IndexError:
-                    return "Expected a name after 'as'."
-                break
-            elif "=" in arg:
-                key, value = arg.split("=", 1)
-                filter_args[key] = self.execute_expression(value)
-            else:
-                return f"Invalid argument format: {arg}"
-
-        # If no name is provided, generate a random one
-        if not list_name:
-            list_name = self._generate_random_name()
-
-        # Fetch the objects using the filter arguments
-        objects = self.find_objects(class_name, filter_args)
-
-        if not objects:
-            return f"No objects of type {class_name} matching the criteria found."
-
-        # If only one object, store it directly. Otherwise, store as a list.
-        if len(objects) == 1:
-            self.execution_scope[list_name] = objects[0]
-            return f"Object of type {class_name} added as {list_name}."
-        else:
-            self.execution_scope[list_name] = objects
-            return f"{len(objects)} objects of type {class_name} added to {list_name}."
-
-    def process_create(self, command_str: str) -> str:
-        """
-        Processes a 'create' command to instantiate a new model object based on provided attributes.
-
-        Parameters:
-        - command_str (str): The command string, starting with the class name followed 
-                            by a series of attribute=value pairs.
-
-        Behavior:
-        1. Extracts the class name and validates its existence.
-        2. Processes the attribute=value pairs to construct the model object.
-        3. Calls the appropriate function (`self.create_object`) to instantiate the object.
-
-        Returns:
-        - A string message indicating the outcome of the command, which could be an error message, 
-        a help message, or a success message with a representation of the created object.
-        """
-        
-        # Split the arguments
-        args = command_str.split()
-
-        # Validate if the class name is provided and is known
-        if not args:
-            return "No arguments provided."
-        
-        class_name = args[0]
-        if class_name not in self.model_specs.get_class_names():
-            return "Unknown Object Type."
-
-        # If only the class name is provided or if help is requested
-        if len(args) == 1 or args[1] == "-help":
-            return "\n".join(self.model_specs.get_variable_summary(class_name))
-
-        # Process the attribute/reference specifications
-        init_params = {}
-        for arg in args[1:]:
-            key, value_str = arg.split("=", 1)
-            try:
-                value = self.execute_expression(value_str)
-                init_params[key] = value
-            except Exception as e:
-                return f"Error occurred during evaluation of {value_str}: {str(e)}"
-
-        # Create the object
-        try:
-            obj = self.create_object(class_name, init_params)
-            return str(obj)
-        except Exception as e:
-            return f"Error occurred during object creation: {str(e)}"
-
-    def process_add(self, expression: str) -> str:
-        """
-        Processes an 'add' command to add an object or list of objects to the model.
-
-        Parameters:
-        - expression (str): A Python expression that evaluates to an object or a list of objects.
-
-        Behavior:
-        1. Evaluates the provided expression.
-        2. Checks if the resulting object (or objects) are of a known model object type.
-        3. Calls the appropriate function (`self.add_object` or `self.add_multiple_objects`) to add the object(s) to the model.
-
-        Returns:
-        - A string message indicating the outcome of the command, which could be an error message or a success message.
-        """
-        
-        try:
-            # Evaluate the expression
-            result = self.execute_expression(expression)
-
-            valid_classes = self.model_specs.get_class_names()
-            # Check if the result is a list of known model objects
-            if isinstance(result, list) and all(type(item).__name__ in valid_classes for item in result):
-                if self.add_multiple_objects(result):
-                    return "All objects added successfully."
-                else:
-                    return "Failed to add list of objects."
-            
-            # Check if the result is a singular known model object
-            elif type(result).__name__ in valid_classes:
-                try:
-                    self.add_object(result)
-                    return f"Object {result} added successfully."
-                except Exception as e:
-                    return f"Failed to add object: {result}"
-
-            # If result is neither a list of known model objects nor a singular known model object
-            else:
-                return f"Expression does not evaluate to a recognized model object or list of model objects."
-
-        except Exception as e:
-            return f"Error occurred during evaluation: {str(e)}"
-        
-    def process_io(self, command: str) -> str:
-        """
-        Process IO commands related to the payload bay.
-
-        Args:
-            command (str): The input command string.
-
-        Returns:
-            str: The result or response to the command.
-        """
-
-        # Split the command into parts
-        parts = command.split()
-
-        # Check for valid commands
-        if not parts:
-            return "Invalid IO command."
-
-        action = parts[0]
-
-        # Handle 'list' action
-        if action == "list":
-            return self._list_payload_bay()
-
-        # Handle 'read' action
-        elif action == "read":
-            filename = parts[1]
-            var_name = parts[-1] if parts[-2] == "as" else None
-            if len(parts) % 2 == 0:
-                return self._read_file_to_variable(filename, var_name)
-            else:
-                class_method_str = parts[2]
-                return self._read_and_process_file(filename, class_method_str, var_name)
-
-        # Handle 'write' action (if you decide to implement it later)
-        # elif action == "write":
-        #     # Implementation here
-
-        else:
-            return "Unknown IO action."
-
-    def process_help(self, command_str: str) -> str:
-        if not command_str:
-            return command_help
-
-        param = command_str.lower()
-        
-        if param == "get":
-            return """
-Usage for 'get' command:
-> get [class_name] [attribute/reference=value] ... [attribute/reference=value] optional: as [name of return list]
-- Loads a model object or list of model objects of type class_name based on attribute/reference=value specifications. 
-- Results can optionally be stored under a specific name.
-            """
-        
-        elif param == "create":
-            return """
-Usage for 'create' command:
-> create [class_name] -help
-- Displays required and optional parameters for class_name.
-> create [class_name] [attribute1=value1] ... [attributeN=valueN]
-- Creates a new model object with the specified parameters in both program context and persistent storage.
-            """
-        
-        elif param == "add":
-            return """
-Usage for 'add' command:
-> add [expression that evaluates to a model object or list of model objects]
-- Adds a model object or list of model objects created in program context to persistent storage.
-            """
-
-        else:
-            return f"Unknown help topic: {param}\r\n" + command_help
-
-
-    def gather_objects(self):
-        response = {
-            "model_objects": {},
-            "runtime_objects": {
-                "lists": [],
-                "dicts": [],
-                "variables": []
-            }
-        }
-        
-        # Handle the general_register (model objects)
-        general_register = getattr(self.loaded_module, "register", {})
-        for object_type, register in general_register.items():
-            response["model_objects"][object_type] = [
-                {"name": key, "content": str(value)}
-                for key, value in register.items()
-            ]
-        
-        # Handle other runtime objects
-        for attr_name, value in self.execution_scope.items():
-            if attr_name.startswith("_"):  # Exclude private members
-                continue
-            if attr_name == "self": # Exclude ModelInterpreter self
-                continue
-            if type(value).__name__ in ["type", "ABCMeta", "module", "function"]: # Exclude classes, modules and functions
-                continue
-            if str(value).startswith("typing."): # Exclude typing module members
-                continue
-            obj_repr = {"name": attr_name}
-            if isinstance(value, list):
-                obj_repr["content"] = [{"type": type(item).__name__, "value": str(item)} for i, item in enumerate(value)]
-                response["runtime_objects"]["lists"].append(obj_repr)
-            elif isinstance(value, dict):
-                if attr_name in known_dicts:
-                    continue
-                obj_repr["content"] = [{"key": str(k), "type": type(v).__name__, "value": str(v)} for k, v in value.items()]
-                response["runtime_objects"]["dicts"].append(obj_repr)
-            else:
-                obj_repr["type"] = type(value).__name__
-                obj_repr["content"] = str(value)
-                response["runtime_objects"]["variables"].append(obj_repr)
-        
-        return response
-
-    def _list_payload_bay(self) -> str:
-        """
-        List the files in the payload bay.
-
-        Returns:
-            str: List of files in the payload bay.
-        """
-        files = os.listdir("payload_bay")
-        if not files:
-            return "Payload bay is empty."
-        return "\n".join(files)
-
-    def _read_file_to_variable(self, filename: str, var_name: str = None) -> str:
-        """
-        Read the file content and store it in a variable.
-
-        Args:
-            filename (str): Name of the file.
-            var_name (str, optional): Name of the variable to store the content. Defaults to filename.
-
-        Returns:
-            str: Confirmation message.
-        """
-        with open(os.path.join("payload_bay", filename), 'r') as file:
-            content = file.read()
-        
-        var_name = var_name or filename
-        # Store the content in a variable
-        self.execution_scope[var_name] = content
-        
-        return f"Content of {filename} has been stored in variable: {var_name}"
-    
-    def _read_and_process_file(self, filename: str, function_str: str, var_name: str = None) -> str:
-        """
-        Read the file content and process it using the specified class method.
-
-        Args:
-            filename (str): Name of the file.
-            function_str (str): String representation of the function or class method to process the content.
-            var_name (str, optional): Name of the variable to store the content. Defaults to filename.
-
-        Returns:
-            str: Result after processing the content.
-        """
-        # Check if function_str contains '.' indicating it's a class method
-        if '.' in function_str:
-            class_name, method_name = function_str.split('.')
-            
-            # Get the class and method from the loaded module
-            target_class = getattr(self.loaded_module, class_name, None)
-            if not target_class:
-                return f"Error: {class_name} not found."
-            
-            target_function = getattr(target_class, method_name, None)
-            if not target_function:
-                return f"Error: {function_str} not found."
-        else:
-            # It's a function directly in the loaded module
-            target_function = getattr(self.loaded_module, function_str, None)
-            
-            if not target_function:
-                return f"Error: {function_str} not found."
-
-        with open(os.path.join("payload_bay", filename), 'r') as file:
-            content = file.read()
-
-        # Process the content using the target function
-        result = target_function(content)
-
-        # calculate var name
-        var_name = var_name if var_name else filename
-        # Store the result in a runtime variable
-        self.execution_scope[var_name] = result
-
-        return f"Processed content of {filename} using {function_str} and stored the result in variable: {var_name}"

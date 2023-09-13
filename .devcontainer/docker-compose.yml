@@ -6,7 +6,7 @@ services:
     volumes:
       - ../flask:/workspace
       - ../flask/payload_bay:/workspace/payload_bay
-      - ../dm_transformer/dm_specs.py:/workspace/dm_specs.py
+      - ../dm_transformer/dm_specs.py:/workspace/src/dm_specs.py
       - ../dm_transformer/data_models:/workspace/data_models
     working_dir: /workspace
     ports:

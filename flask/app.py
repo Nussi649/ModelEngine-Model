@@ -3,7 +3,7 @@ import threading
 from flask import Flask, render_template, jsonify, request
 from dotenv import load_dotenv
 from neo4j import GraphDatabase
-from model_interpreter import ModelInterpreter
+from src.model_interpreter import ModelInterpreter
 import logging
 
 
@@ -12,7 +12,7 @@ app = Flask(__name__, template_folder="templates")
 URI = "neo4j://neo4j:7687"
 AUTH = ("neo4j", os.getenv("NEO4J_PASSWORD"))
 RESET_PASSWORD ="K€N0Bi"
-MODEL_INTERPRETER = ModelInterpreter(URI, AUTH, "FinanceHelper.py")
+MODEL_INTERPRETER = ModelInterpreter(URI, AUTH, "NumberTheory.xml", "NumberTheory.py")
 
 # Function to handle terminal input
 def terminal_input():

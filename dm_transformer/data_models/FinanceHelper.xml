@@ -1,20 +1,23 @@
 <Classes>
-    <Class name="AssetAccount">
-        <Collection>Account</Collection>
-        <Attribute type="text" is_key="true" required="true">name</Attribute>
-        <Reference type="Tx" multiplicity="multi" required="false">transactions</Reference>
+    <Class name="PayAcc">
+        <Attribute type="text" required="true" is_key="true">Name</Attribute>
+        <Reference type="Tx" multiplicity="multi" required="false">Transactions</Reference>
+        <Reference type="TimeSeriesPoint" multiplicity="multi" required="false">Balances</Reference>
     </Class>
-    <Class name="BudgetAccount">
-        <Collection>Account</Collection>
-        <Attribute type="text" is_key="true" required="true">name</Attribute>
-        <Attribute type="float" required="false">yearly_budget</Attribute>
-        <Reference type="Tx" multiplicity="multi" required="false">transactions</Reference>
+    <Class name="InvAcc">
+        <Attribute type="text" required="true" is_key="true">Name</Attribute>
+        <Reference type="Tx" multiplicity="multi" required="false">Transactions</Reference>
+        <Reference type="TimeSeriesPoint" multiplicity="multi" required="false">Sums</Reference>
     </Class>
     <Class name="Tx">
-        <Collection>Base</Collection>
-        <Attribute type="text" is_key="true" required="true">identifier</Attribute>
-        <Attribute type="text" required="true">description</Attribute>
-        <Attribute type="float" required="true">amount</Attribute>
-        <Attribute type="datetime" required="true">time</Attribute>
+        <Attribute type="text" required="true" is_key="true">UUID</Attribute>
+        <Attribute type="float" required="true">Amount</Attribute>
+        <Attribute type="text" required="true">Description</Attribute>
+        <Attribute type="datetime" required="true">Timestamp</Attribute>
+    </Class>
+    <Class name="TimeSeriesPoint">
+        <Attribute type="text" required="true" is_key="true">UUID</Attribute>
+        <Attribute type="float" required="true">Value</Attribute>
+        <Attribute type="datetime" required="true">Timestamp</Attribute>
     </Class>
 </Classes>

@@ -8,8 +8,6 @@ from src.model_db import ModelDB
 
 valid_commands = ["get", "create", "add", "io", "help"]
 
-known_dicts = ["INVERSE_RELATIONSHIPS", "register"]
-
 command_help = """
 _______ Command Usage _______
 
@@ -309,7 +307,6 @@ class ModelInterpreter:
         # Check for valid commands
         if not parts:
             return "Invalid IO command."
-
         action = parts[0]
 
         # Handle 'list' action
@@ -326,9 +323,13 @@ class ModelInterpreter:
                 class_method_str = parts[2]
                 return self._read_and_process_file(filename, class_method_str, var_name)
 
-        # Handle 'write' action (if you decide to implement it later)
-        # elif action == "write":
-        #     # Implementation here
+        # Handle 'write' action
+        elif action == "write":
+            # Extract the expression, filename, and append flag
+            expression = parts[1]
+            filename = parts[2]
+            append_flag = True if "-a" in parts else False
+            return self._write_to_file(expression, filename, append_flag)
 
         else:
             return "Unknown IO action."
@@ -447,3 +448,29 @@ Usage for 'add' command:
         self.runtime.set_to_scope(var_name, result)
 
         return f"Processed content of {filename} using {function_str} and stored the result in variable: {var_name}"
+    
+    def _write_to_file(self, expression: str, filename: str, append: bool) -> str:
+        """
+        Evaluate the expression and write the result to the specified file.
+
+        Args:
+            expression (str): The expression to evaluate.
+            filename (str): The name of the target file.
+            append (bool): If True, append to the file; otherwise, overwrite.
+
+        Returns:
+            str: A message indicating success or failure.
+        """
+        try:
+            # Evaluate the expression
+            content = self.runtime.evaluate(expression)
+            if not isinstance(content, str):
+                return f"Error: Expression did not evaluate to a string."
+
+            # Write or append to the file
+            mode = 'a' if append else 'w'
+            with open(os.path.join("payload_bay", filename), mode) as file:
+                file.write(content)
+            return f"Content written to {filename} successfully."
+        except Exception as e:
+            return f"Error writing to file: {e}"

@@ -8,6 +8,9 @@ class ModuleUnavailableError(RuntimeError):
     pass
 
 
+known_dicts = ["INVERSE_RELATIONSHIPS", "register"]
+
+
 class RuntimeManager:
     def __init__(self, module_path: str):
         self.module_path = module_path
@@ -56,11 +59,7 @@ class RuntimeManager:
 
     def evaluate(self, expression: str):
         """Evaluate an expression and return its result."""
-        try:
-            result = eval(expression, self.execution_scope)
-        except Exception as e:
-            return str(e)
-        return result
+        return eval(expression, self.execution_scope)
     
     def set_to_scope(self, attr_name: str, value):
         self.execution_scope[attr_name] = value
@@ -116,6 +115,8 @@ class RuntimeManager:
         # Handle other runtime objects
         for attr_name, value in self.execution_scope.items():
             if attr_name.startswith("_"):  # Exclude private members
+                continue
+            if attr_name in known_dicts:
                 continue
             if type(value).__name__ in ["type", "ABCMeta", "module", "function"]: # Exclude classes, modules and functions
                 continue

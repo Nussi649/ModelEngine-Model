@@ -22,7 +22,7 @@ def attribute_type_to_annotation(attr_type: str) -> str:
 class ModelSpecifications:
 
 # region Setup
-    def __init__(self, xml_path=None, xml_content=None, xsd_path="dm_transformer/data_models/format_specifications/dm_specification_schema.xsd"):
+    def __init__(self, xml_path=None, xml_content=None, xsd_path="data_models/format_specifications/dm_specification_schema.xsd"):
         """
         Constructor for the DataModelService.
 
@@ -33,7 +33,9 @@ class ModelSpecifications:
         if xml_path is None and xml_content is None:
             raise ValueError("No XML file specified. Neither through its filepath nor directly as string.")
         
-        self.classes = {}
+        self.model_objects = {}
+        self.composites = {}
+        self.indexes = []
         if xml_path:
             with open(xml_path, 'r') as xml_file:
                 xml_content = xml_file.read()
@@ -59,72 +61,82 @@ class ModelSpecifications:
         except etree.XMLSyntaxError as e:
             raise ValueError(f"Syntactic validation error: {e}")
         
-    def _semantic_validate(self):
-        # Check 1: Collection is optional if is_abstract="true" for a Class
-        for class_name, class_info in self.classes.items():
-            if class_info.get('is_abstract') and 'Collection' in class_info:
-                raise ValueError(f"Class {class_name} is abstract and should not contain a Collection element.")
-        
-        # Check 2: Exactly one Attribute within each non-abstract class should have is_key="true" and type="string"
-        for class_name, class_info in self.classes.items():
+    def _semantic_validate(self):        
+        # Check 1: Exactly one Attribute within each non-abstract class should have is_key="true" and type="string"
+        for class_name, class_info in self.model_objects.items():
             if not class_info.get('is_abstract'):
                 key_attrs = [attr_info for attr, attr_info in class_info['attributes'].items() if attr_info.get('is_key')]
                 if len(key_attrs) != 1 or key_attrs[0].get('type') != 'str':
                     raise ValueError(f"Class {class_name} should have exactly one key Attribute of type string.")
         
-        # Check 3: If Attribute has is_key="true", it implies required=true
-        for class_name, class_info in self.classes.items():
+        # Check 2: If Attribute has is_key="true", it implies required=true
+        for class_name, class_info in self.model_objects.items():
             for attr, attr_info in class_info['attributes'].items():
                 if attr_info.get('is_key') and not attr_info.get('required'):
                     raise ValueError(f"Attribute {attr} in Class {class_name} with is_key='true' should also have required='true'.")
+                
+        # Check 3: Each ModelObject reference has to point to a known ModelObject type
+
+        # Check 4: Each ModelObject collection has to point to a known Composite type
 
     def _parse_xml(self, xml_content):
         """
         Parses the XML content to populate the internal data structures.
 
-        The XML content should have a structure where all `Class` elements are wrapped 
-        inside a `Classes` root element.
+        The XML content should have a structure where all `ModelObject` and `Composite` elements are wrapped 
+        inside a `Entities` root element.
 
         Parameters:
             xml_content (str): XML data containing the model specifications.
 
         Structure of expected XML:
-        <Classes>
-            <Class name="ClassName1" ...>
+        <Entities>
+            <ModelObject name="ObjectType1" ...>
                 <Attribute ...>attr_name1</Attribute>
                 ...
                 <Reference ...>ref_name1</Reference>
                 ...
-            </Class>
+                <Collection ...>col_name1</Reference>
+                ...
+            </ModelObject>
+            <Composite name="CompositeType1" ...>
+                <Attribute ...>attr_name1</Attribute>
+                ...
+            </Composite>
             ...
-        </Classes>
+        </Entities>
         """
         root = ET.fromstring(xml_content)
 
-        # Iterating over each 'Class' element under the 'Classes' root
-        for class_elem in root.findall('Class'):
+        # Iterating over each 'ModelObject' element under the 'Entities' root
+        for class_elem in root.findall('ModelObject'):
             class_name = class_elem.get('name')
             class_info = {
                 'is_abstract': class_elem.get('is_abstract') == 'true',
                 'extends': class_elem.get('extends'),
                 'attributes': {},
                 'references': {},
+                'collections': {}
             }
 
-            # Parsing each 'Attribute' element under the current 'Class' element
+            # Parsing each 'Attribute' element under the current 'ModelObject' element
             for attr_elem in class_elem.findall('Attribute'):
                 attr_name = attr_elem.text.strip()
                 attribute_info = {
                     'type': attribute_type_to_annotation(attr_elem.get('type')),
                     'is_key': attr_elem.get('is_key') == 'true',
-                    'required': True if attr_elem.get('is_key') == 'true' else attr_elem.get('required') == 'true'
+                    'required': True if attr_elem.get('is_key') == 'true' else attr_elem.get('required') == 'true',
+                    'indexed': attr_elem.get('indexed') == 'true'
                 }
                 # If the attribute is marked as the key, store its name at the class level
                 if attribute_info['is_key']:
                     class_info['key'] = attr_name
                 class_info['attributes'][attr_name] = attribute_info
+                # If the attribute is indexed, store it in corresponding list
+                if attribute_info['indexed']:
+                    self.indexes.add({'entity_type': 'ModelObject', 'type_name': class_name, 'attribute_name': attr_name})
 
-            # Parsing each 'Reference' element under the current 'Class' element
+            # Parsing each 'Reference' element under the current 'ModelObject' element
             for ref_elem in class_elem.findall('Reference'):
                 ref_name = ref_elem.text.strip()
                 reference_info = {
@@ -135,8 +147,38 @@ class ModelSpecifications:
                 }
                 class_info['references'][ref_name] = reference_info
 
+            # Parsing each 'Collection' element under the current 'ModelObject' element
+            for col_elem in class_elem.findall('Collection'):
+                col_name = col_elem.text.strip()
+                collection_info = {
+                    'type': col_elem.get('type')
+                }
+                class_info['collections'][col_name] = collection_info
+
             # Storing the parsed information for the current class
-            self.classes[class_name] = class_info
+            self.model_objects[class_name] = class_info
+
+        # Iterating over each 'Composite' element under the 'Entities' root
+            for comp_elem in root.findall('Composite'):
+                comp_name = comp_elem.get('name')
+                comp_info = {
+                    'attributes': {}
+                }
+
+                # Parsing each 'Attribute' element under the current 'Composite' element
+                for attr_elem in comp_elem.findall('Attribute'):
+                    attr_name = attr_elem.text.strip()
+                    attribute_info = {
+                        'type': attribute_type_to_annotation(attr_elem.get('type')),
+                        'indexed': attr_elem.get('indexed') == 'true'
+                    }
+                    comp_info['attributes'][attr_name] = attribute_info
+                    # If the attribute is indexed, store it in corresponding list
+                    if attribute_info['indexed']:
+                        self.indexes.append({'entity_type': 'Composite', 'type_name': comp_name, 'attribute_name': attr_name})
+
+                # Storing the parsed information for the current class
+                self.composites[comp_name] = comp_info
 # endregion
 
 # region Helper functions
@@ -152,7 +194,7 @@ class ModelSpecifications:
         Returns:
             bool: True if the reference is valid, False otherwise.
         """
-        valid_references = [details['type'] for ref, details in self.classes[source_class]['references'].items() if ref == reference_name]
+        valid_references = [details['type'] for ref, details in self.model_objects[source_class]['references'].items() if ref == reference_name]
         return target_class in valid_references
 # endregion
 
@@ -161,9 +203,9 @@ class ModelSpecifications:
         """
         Returns all known Class names as list of strings
         """
-        return list(self.classes.keys())
+        return list(self.model_objects.keys())
     
-    def get_attributes(self, class_name: str, indiv_key=True) -> List[str]:
+    def get_object_attributes(self, class_name: str, indiv_key=True) -> List[str]:
         """
         Provides the names of all attributes of a given class.
 
@@ -174,7 +216,7 @@ class ModelSpecifications:
         Returns:
             List[str]: List of attribute names as strings
         """
-        class_dict = self.classes.get(class_name)
+        class_dict = self.model_objects.get(class_name)
         if not class_dict:
             return None
         
@@ -186,6 +228,22 @@ class ModelSpecifications:
             attributes = ['key' if attr == individual_key_name else attr for attr in attributes]
 
         return attributes
+    
+    def get_composite_attributes(self, composite_name: str) -> List[str]:
+        """
+        Provides the names of all attributes of a given composite.
+
+        Parameters:
+            composite_name (str): Name of the composite.
+
+        Returns:
+            List[str]: List of attribute names as strings
+        """
+        class_dict = self.composites.get(composite_name)
+        if not class_dict:
+            return None
+        
+        return class_dict.get('attributes', [])
 
     def get_references(self, class_name: str) -> List[str]:
         """
@@ -197,7 +255,7 @@ class ModelSpecifications:
         Returns:
             List[str]: List of reference names as strings
         """
-        class_dict = self.classes.get(class_name)
+        class_dict = self.model_objects.get(class_name)
         return class_dict['references'] if class_dict else None
 
     def has_any_reference(self, class_name: str) -> bool:
@@ -210,7 +268,7 @@ class ModelSpecifications:
         Returns:
             bool: True if the class has any variables that point to objects of other Model classes.
         """
-        return bool(self.classes[class_name]['references'])
+        return bool(self.model_objects[class_name]['references'])
 
     def get_key_attribute(self, class_name: str) -> str:
         """
@@ -222,7 +280,7 @@ class ModelSpecifications:
         Returns:
             str: Name of the key attribute.
         """
-        return self.classes[class_name]['key']
+        return self.model_objects[class_name]['key']
 
     def get_reference_type(self, class_name: str, reference_name: str) -> str:
         """
@@ -237,7 +295,18 @@ class ModelSpecifications:
         """
         # transform to lower case
         reference_name = reference_name.lower()
-        return self.classes[class_name]['references'][reference_name]['type']
+        return self.model_objects[class_name]['references'][reference_name]['type']
+
+    def get_indexes(self) -> List[dict]:
+        """
+        Returns a list of dictionaries, each containing information about an indexed attribute.
+
+        Returns:
+            List[dict]: A list of dictionaries where each dictionary provides details about 
+                        an indexed attribute, including the entity type (ModelObject/Composite),
+                        the name of the ModelObject or Composite class, and the name of the indexed attribute.
+        """
+        return self.indexes
 
     def is_multi_reference(self, class_name: str, reference_name: str) -> bool:
         """
@@ -252,7 +321,7 @@ class ModelSpecifications:
         """
         # transform to lower case
         reference_name = reference_name.lower()
-        return self.classes[class_name]['references'][reference_name]['multiplicity'] == 'multi'
+        return self.model_objects[class_name]['references'][reference_name]['multiplicity'] == 'multi'
 
     def is_attribute_required(self, class_name: str, attribute_name: str) -> bool:
         """
@@ -265,7 +334,7 @@ class ModelSpecifications:
         Returns:
             bool: True if the attribute is required, False otherwise.
         """
-        return self.classes[class_name]['attributes'][attribute_name]['required']
+        return self.model_objects[class_name]['attributes'][attribute_name]['required']
 
     def is_reference_required(self, class_name: str, reference_name: str) -> bool:
         """
@@ -278,7 +347,7 @@ class ModelSpecifications:
         Returns:
             bool: True if the reference is required, False otherwise.
         """
-        return self.classes[class_name]['references'][reference_name]['required']
+        return self.model_objects[class_name]['references'][reference_name]['required']
 # endregion
 
 # region Complex functions
@@ -294,7 +363,7 @@ class ModelSpecifications:
         Returns:
             bool: True if arguments match the model specifications, False otherwise.
         """
-        class_info = self.classes.get(class_name)
+        class_info = self.model_objects.get(class_name)
         if not class_info:
             return False
         args_copy = args.copy()
@@ -350,11 +419,11 @@ class ModelSpecifications:
         references = {}
 
         # Get the key attribute name for the class
-        key_attribute_name = self.classes[class_name]['key']
+        key_attribute_name = self.model_objects[class_name]['key']
 
         # Get attributes and references from the class specification
-        class_attributes = set(attr for attr, _ in self.classes[class_name]['attributes'].items())
-        class_references = set(ref for ref, _ in self.classes[class_name]['references'].items())
+        class_attributes = set(attr for attr, _ in self.model_objects[class_name]['attributes'].items())
+        class_references = set(ref for ref, _ in self.model_objects[class_name]['references'].items())
 
         # If the key attribute name exists in class_attributes and is not 'key', replace it with 'key'
         if key_attribute_name in class_attributes and key_attribute_name != 'key':
@@ -386,11 +455,10 @@ class ModelSpecifications:
         Returns:
             List[str]: List of strings summarizing each attribute and reference
         """
-        class_dict = self.classes.get(class_name)
+        class_dict = self.model_objects.get(class_name)
         if not class_dict:
             return None
         attr_sum = [f"{key + (' (key)' if data['is_key'] else '')} : {data['type'] + ' (required)' if data['required'] else ' (optional)'}" for key, data in class_dict['attributes'].items()]
         ref_sum = [f"{key} : {data['type'] + ' (required)' if data['required'] else ' (optional)' } ({data['multiplicity']}){' Inverse: ' + data['inverse'] if data['inverse'] else ''}" for key, data in class_dict['references'].items()]
         return attr_sum + ref_sum
-
 # endregion

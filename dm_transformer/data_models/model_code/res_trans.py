@@ -1,7 +1,7 @@
 from typing import List, Optional, Union
 from abc import ABC
 from datetime import datetime
-from data_models.model_code.model_entity import ModelEntity
+from dm_transformer.data_models.model_code.core import ModelEntity
 
 INVERSE_RELATIONSHIPS = {
     'direct_constituents': 'parents',

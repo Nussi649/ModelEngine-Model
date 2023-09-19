@@ -11,11 +11,12 @@ def generate_reference_code(ref_name: str, ref_details: dict) -> str:
     ref_type = f"'{ref_details['type']}'"
     return f"{ref_name}: {f'List [{ref_type}]' if ref_details['multiplicity'] == 'multi' else f'{ref_type}'}"
 
-def generate_init(class_details: dict) -> List[str]:
+def generate_init(class_name: str, class_details: dict) -> List[str]:
     """
     Generate the __init__ method for the class.
     
     Args:
+    - class_name (str): Name of the class that should be initiated
     - class_details (dict): Details about class as per data format used in ModelSpecifications.
     
     Returns:
@@ -26,6 +27,7 @@ def generate_init(class_details: dict) -> List[str]:
     if key_name in attributes:
         attributes['key'] = attributes.pop(key_name)
     references = class_details.get("references", {})
+    collections = class_details.get("collections", {})
 
     params = [
         "self",
@@ -46,6 +48,10 @@ def generate_init(class_details: dict) -> List[str]:
         f"{' ' * 4}        raise ValueError('Attribute key is required')",
         f"{' ' * 4}    super().__init__(key=key, mini_mode=mini_mode)"
     ]
+
+    # Initialize Collection objects
+    for coll, details in collections.items():
+        init_lines.append(f"{' ' * 8}self.{coll}: 'Collection' = Collection({class_name}, key, '{coll}', {details['type']})")
     
     # From here on, key attribute will be only redundant
     attributes.pop('key') # attributes can be assumed to contain key attribute because generate_init would not be called for an abstract class
@@ -140,6 +146,40 @@ def generate_upgrade(class_details: dict) -> List[str]:
 
     return upgrade_lines
     
+def generate_composite(composite_name: str, composite_details: dict) -> List[str]:
+    """
+    Generate the class definition for a composite.
+    
+    Args:
+    - composite_name (str): Name of the composite that should be generated.
+    - composite_details (dict): Details about composite as per data format used in ModelSpecifications.
+    
+    Returns:
+    - List of Codeline Strings representing the class.
+    """
+    attributes = composite_details.get("attributes", {})
+    
+    # Constructing parameters for __init__ method
+    params = [
+        "self",
+        *[f"{attr}: {details['type']}" for attr, details in attributes.items()]  # Making every attribute required
+    ]
+    param_string = ", ".join(params)
+
+    # Initialize a list to hold lines of the class
+    composite_lines = [
+        f"class {composite_name}(Composite):",
+        f"{' ' * 4}def __init__({param_string}):"
+    ]
+
+    # Assign attributes
+    for attr, details in attributes.items():
+        composite_lines.append(f"{' ' * 8}self.{attr} = {attr}")
+        
+    composite_lines.append("")
+    return "\n".join(composite_lines)
+
+
 # endregion
 
 def generate_class_code(class_name: str, class_details: dict) -> str:
@@ -155,7 +195,7 @@ def generate_class_code(class_name: str, class_details: dict) -> str:
     references = class_details.get("references", {})
     key_name = class_details.get('key', None)
     extends = class_details.get('extends')
-    base_classes = ', '.join(['ModelEntity', extends] if extends else ['ModelEntity'])
+    base_classes = ', '.join(['ModelObject', extends] if extends else ['ModelObject'])
     if class_details['is_abstract']:
         base_classes = "ABC"
 
@@ -177,7 +217,7 @@ def generate_class_code(class_name: str, class_details: dict) -> str:
         return "\n".join(class_code)
 
     # Generate list of constructor params (all optional - generator functions handle required checks)
-    class_code.extend(generate_init(class_details))
+    class_code.extend(generate_init(class_name, class_details))
     # Add upgrade function
     class_code.extend(generate_upgrade(class_details))
     # Add key attribute also as property

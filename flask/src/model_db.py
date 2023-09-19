@@ -16,6 +16,13 @@ get_object_query = """
 
 
 class ModelDB:
+    _instance = None
+
+    def __new__(cls, *args, **kwargs):
+        if not cls._instance:
+            cls._instance = super(ModelDB, cls).__new__(cls)
+        return cls._instance
+        
     def __init__(self, model_specs: ModelSpecifications, runtime_manager: RuntimeManager, URI: str, AUTH: tuple):
         self._URI = URI
         self._AUTH = AUTH
@@ -23,6 +30,12 @@ class ModelDB:
         self.runtime = runtime_manager
         self.runtime.set_to_scope("__get_model_object__", self.get_object)
         self.driver = GraphDatabase.driver(URI, auth=AUTH)
+
+    @classmethod
+    def get_instance(cls):
+        if not cls._instance:
+            raise ValueError("ModelDB instance has not been initialized yet!")
+        return cls._instance
 
     @property
     def URI(self):
@@ -49,15 +62,32 @@ class ModelDB:
     def resolve_class_name(self, class_name):
         if not self.runtime.get_status():
             raise ModuleUnavailableError("No model code loaded.")
-        if class_name not in self.model_specs.classes:
+        if class_name not in self.model_specs.model_objects:
             raise ValueError(f"Class {class_name} not recognized.")
         return self.runtime.get_attr(class_name)
+
+    def create_indexes(self):
+        indexes = self.model_specs.get_indexes()
+        with self.driver.session() as session:
+            tx = session.begin_transaction()
+            for attribute in indexes:
+                type_name = attribute['type_name']
+                attr_name = attribute['attribute_name']
+                query = f"CREATE INDEX index_{type_name}_{attr_name} IF NOT EXISTS FOR (n:{type_name}) ON (n.{attr_name})"
+                try:
+                    result = tx.run(query)
+                    if result.consume().counters.contains_updates():
+                        raise ValueError(f"Unexpected database change when creating index for {type_name} on {attr_name}.")
+                except Exception as e:
+                    tx.rollback()
+                    raise ValueError(f"Error creating index for {type_name} on {attr_name}. Details: {str(e)}")
+            tx.commit()
 
     def _objects_match(self, obj1, obj2) -> bool:
         """
         Check if two objects match in every attribute and reference.
         """
-        attrs = self.model_specs.get_attributes(type(obj1).__name__)
+        attrs = self.model_specs.get_object_attributes(type(obj1).__name__)
         refs = self.model_specs.get_references(type(obj1).__name__)
         
         for attr in attrs:
@@ -109,7 +139,7 @@ class ModelDB:
             node_attrs_list.append(node_attr)
 
         node_attrs = ", ".join(node_attrs_list)
-        query = [f"CREATE (a:{class_name} {{ {node_attrs} }})"]
+        query = [f"CREATE (a:{class_name}:ModelObject {{ {node_attrs} }})"]
         expected_rel_created = 0
 
         if any(ref_data for ref_data in refs.values()):
@@ -243,7 +273,7 @@ class ModelDB:
         # If related nodes and relationships are to be included, modify the query
         if not reduced:
             query += """
-            OPTIONAL MATCH (n)-[r]->(related)
+            OPTIONAL MATCH (n)-[r]->(related:ModelObject)
             RETURN 
                 n as main_node,
                 type(r) as relationship_type, 
@@ -345,7 +375,7 @@ class ModelDB:
             List of objects matching the criteria.
         """
         # Validate args
-        valid_attributes = self.model_specs.get_attributes(class_name, indiv_key=False)
+        valid_attributes = self.model_specs.get_object_attributes(class_name, indiv_key=False)
         valid_references = self.model_specs.get_references(class_name)
         property_filters = []
         relationship_filters = []
@@ -606,7 +636,7 @@ class ModelDB:
                 prepare_reference(ref, value)
             
             # also add attributes
-            args.update({attr: getattr(obj_instance, attr) for attr in self.model_specs.get_attributes(class_name, indiv_key=False) if hasattr(obj_instance, attr)})
+            args.update({attr: getattr(obj_instance, attr) for attr in self.model_specs.get_object_attributes(class_name, indiv_key=False) if hasattr(obj_instance, attr)})
 
             # Construct the creation query
             attrs, refs = self.model_specs.separate_attrs_refs(class_name, args)
@@ -685,6 +715,100 @@ class ModelDB:
                 else:
                     tx.rollback()
                 return success
+
+    def add_composites(self, parent_type: str, parent_key: str, collection_name: str, composite_type: str, composites: List[dict]):
+        """
+        Add new composite nodes to the database and establish a relationship with the parent node.
+
+        Args:
+        - parent_type (str): Type of the parent node (e.g., 'PayAcc').
+        - parent_key (str): Key attribute of the parent node (used to identify the unique node).
+        - collection_name (str): Name of the collection (e.g., 'Transactions').
+        - composite_type (str): Type label for the composite nodes (e.g., 'Tx').
+        - composites (List[dict]): List of dictionaries, each representing a composite's attributes.
+
+        Returns:
+        - None
+        """
+
+        with self.driver.session() as session:
+            # Start a transaction
+            tx = session.begin_transaction()
+
+            # Loop through each composite dict
+            for composite_data in composites:
+                # Validation of the composite's attributes can be done here if needed
+
+                # Generate a create query for the composite
+                node_attrs_list = []
+                for k, v in composite_data.items():
+                    if isinstance(v, datetime):
+                        formatted_datetime = v.isoformat()
+                        node_attr = f'{k}: datetime("{formatted_datetime}")'
+                    else:
+                        node_attr = f"{k}: {json.dumps(v)}"
+                    node_attrs_list.append(node_attr)
+
+                composite_attributes = ", ".join(node_attrs_list)
+                create_query = (
+                    f"MATCH (parent:{parent_type} {{key: '{parent_key}'}}) "
+                    f"CREATE (composite:{composite_type}:Composite {{{composite_attributes}}}), "
+                    f"(parent)-[:{collection_name} {{type: 'Collection'}}]->(composite)"
+                )
+
+                # Run the query
+                result = tx.run(create_query)
+                counters = result.consume().counters
+                # Check if the node and relationship were created correctly
+                if not counters.nodes_created == 1 or not counters.relationships_created == 1:
+                    tx.rollback()
+                    raise Exception("Error in creating the composite node or its relationship!")
+
+            # If everything went well, commit the transaction
+            tx.commit()
+
+    def get_composites(self, parent_type: str, parent_key: str, collection_name: str, composite_type: str, **filter_params) -> List[tuple]:
+        """
+        Retrieve composites related to a parent node based on provided criteria.
+
+        Args:
+        - parent_type (str): Type of the parent node (e.g., 'PayAcc').
+        - parent_key (str): Key attribute of the parent node (used to identify the unique node).
+        - collection_name (str): Name of the collection (e.g., 'Transactions').
+        - composite_type (str): Type label for the composite nodes (e.g., 'Tx').
+        - **filter_params: Filters for the composite attributes in the format key=value.
+
+        Returns:
+        - List[tuple]: List of tuples, each representing a composite's attributes.
+        """
+
+        # Generate the base query for retrieving composites
+        base_query = (
+            f"MATCH (parent:{parent_type} {{key: '{parent_key}'}})-[:{collection_name}]->(composite:{composite_type}) "
+        )
+
+        # Add filtering conditions if any filter_params are provided
+        if filter_params:
+            filters = [f"composite.{key}='{value}'" for key, value in filter_params.items()]
+            base_query += f" WHERE {' AND '.join(filters)}"
+
+        # Acquire the attributes associated with the composite type from model_specs
+        composite_attributes = self.model_specs.get_composite_attributes(composite_type)
+        
+        # Add the attributes to the RETURN clause of the query
+        base_query += " RETURN " + ', '.join([f"composite.{attr}" for attr in composite_attributes])
+
+        with self.driver.session() as session:
+            result = session.run(base_query)
+            
+            # Compile the return list
+            composites = []
+            for record in result:
+                composite_data = tuple(record[f"composite.{attr}"] for attr in composite_attributes)
+                composites.append(composite_data)
+
+            return composites
+
 
     def delete_object(self, class_name: str, key: str, tx=None): # TODO: Test
         """
@@ -765,7 +889,7 @@ class ModelDB:
             raise ValueError(f"An object of type {class_name} with key {new_key} already exists.")
 
         # Extract the attributes and references from the source object
-        class_info = self.model_specs.classes.get(class_name)
+        class_info = self.model_specs.model_objects.get(class_name)
         attributes = [attr for attr, _ in class_info['attributes'].items() if attr != class_info['key']]
         references = [ref for ref, _ in class_info['references'].items()]
 

@@ -64,7 +64,7 @@ class ModelInterpreter:
     def _interpret_input(self, input_str):
         # Recognize all @Class.Key mentions and replace accordingly
         pattern = r'@([\w]+)\.([\w]+)(?=\W|$)'  # This regex captures @Class.Key
-        replacement = "__get_model_object__('\\1', '\\2')"  # Replacement pattern for the recognized mentions
+        replacement = '__get_model_object__("\\1", "\\2")'  # Replacement pattern for the recognized mentions
 
         interpreted_input = re.sub(pattern, replacement, input_str)
         return interpreted_input

@@ -213,6 +213,31 @@ class ModelDB:
 
         return "\n".join(detach_queries), "\n".join(attach_queries)
 
+    @staticmethod
+    def _fetch_database_stats(tx):
+        # Fetching the number of indexes
+        indexes = tx.run("CALL db.indexes() YIELD name RETURN count(name) AS index_count").single()["index_count"]
+
+        # Fetching the total number of nodes
+        total_nodes = tx.run("MATCH (n) RETURN count(n) AS total").single()["total"]
+
+        # Fetching the number of nodes labeled as ModelObject
+        model_objects = tx.run("MATCH (n:ModelObject) RETURN count(n) AS model_object_count").single()["model_object_count"]
+
+        # Fetching the number of nodes labeled as Composite
+        composites = tx.run("MATCH (n:Composite) RETURN count(n) AS composite_count").single()["composite_count"]
+
+        return {
+            "indexes": indexes,
+            "totalNodes": total_nodes,
+            "modelObjects": model_objects,
+            "composites": composites
+        }
+
+    def get_stats(self):
+        with self.driver.session() as session:
+            return session.read_transaction(self._fetch_database_stats)
+
     def object_from_node(self, class_name, node, records=None, reduced_object=None):
         """
         Constructs a full Python object from a Neo4j node.

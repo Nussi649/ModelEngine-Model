@@ -42,15 +42,13 @@ _______ Referring to Model Objects _______
 BASIC_TYPES = {float, int, str}
 
 class ModelInterpreter:
-    class_types: dict
 
 # region Constructor and @property Attributes
 
-    def __init__(self, URI: str, AUTH: tuple, model_specification: str, model_code: str):
-        self.runtime: RuntimeManager = RuntimeManager("/workspace/data_models/model_code/" + model_code)
-        self.model_specs = ModelSpecifications(xml_path="/workspace/data_models/" + model_specification,
-                                               xsd_path="/workspace/data_models/format_specifications/dm_specification_schema.xsd")
-        self.db: ModelDB = ModelDB(self.model_specs, self.runtime, URI, AUTH)
+    def __init__(self, runtime: RuntimeManager, specs: ModelSpecifications, db: ModelDB):
+        self.runtime: RuntimeManager = runtime
+        self.model_specs = specs
+        self.db: ModelDB = db
 
 # endregion
 

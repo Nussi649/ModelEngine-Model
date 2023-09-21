@@ -13,15 +13,18 @@ known_dicts = ["INVERSE_RELATIONSHIPS", "register"]
 
 class RuntimeManager:
     def __init__(self, module_path: str):
-        self.module_path = module_path
-        self.module_name = os.path.splitext(os.path.basename(module_path))[0].replace(".py", "")
+        self.module_path = ""
+        self.module_name = ""
         self.loaded_module = None
         self.execution_scope = {}
 
-        self._load_module()
+        self.load_module(module_path)
 
     def _load_module(self):
         """Load the module from the given path."""
+        # If a module is already loaded, unload it
+        if self.loaded_module:
+            self._unload_module()
         # Constructing the module spec
         spec = importlib.util.spec_from_file_location(self.module_name, self.module_path)
         self.loaded_module = importlib.util.module_from_spec(spec)
@@ -47,6 +50,12 @@ class RuntimeManager:
     def refresh_module(self):
         """Refresh the loaded module."""
         self._unload_module()
+        self._load_module()
+
+    def load_module(self, module_path: str):
+        """Load a new module."""
+        self.module_path = module_path
+        self.module_name = os.path.splitext(os.path.basename(module_path))[0].replace(".py", "")
         self._load_module()
 
     def execute(self, code: str):

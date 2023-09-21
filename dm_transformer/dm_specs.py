@@ -30,18 +30,42 @@ class ModelSpecifications:
             xml_path (str): Path to the XML specification file 
             xml_content (str): XML data.
         """
-        if xml_path is None and xml_content is None:
-            raise ValueError("No XML file specified. Neither through its filepath nor directly as string.")
         
         self.model_objects = {}
         self.composites = {}
         self.indexes = []
+        self.xsd_path = xsd_path
+        self.load_file(xml_path, xml_content)
+
+    def load_file(self, xml_path=None, xml_content=None):
+        """
+        Load the ModelSpecifications with a new XML file or content.
+
+        Parameters:
+            xml_path (str): Path to the new XML specification file.
+            xml_content (str): New XML data.
+        """
+        if xml_path is None and xml_content is None:
+            raise ValueError("No XML file specified. Neither through its filepath nor directly as string.")
+        
+        # Attempt to read the new XML content if a path is provided
         if xml_path:
-            with open(xml_path, 'r') as xml_file:
-                xml_content = xml_file.read()
+            try:
+                with open(xml_path, 'r') as xml_file:
+                    xml_content = xml_file.read()
+            except Exception as e:
+                raise IOError(f"Error reading the XML file: {e}")
+
+        # If successfully read or xml_content is provided, reset and update data structures
+        self.model_objects = {}
+        self.composites = {}
+        self.indexes = []
+
+        # Update the XML path
+        self.xml_path = xml_path
 
         # Syntactic validation against XSD
-        self._syntactic_validate(xml_content, xsd_path)
+        self._syntactic_validate(xml_content, self.xsd_path)
 
         # Parse XML
         self._parse_xml(xml_content)

@@ -1,9 +1,8 @@
 import React from 'react';
 import { BrowserRouter as Router, Route, Routes, Link } from 'react-router-dom';
 import Dashboard from './components/Dashboard/Dashboard';
-import ModelManagement from './components/ModelManagement/ModelManagement';
-import PayloadBay from './components/PayloadBay/PayloadBay';
-import './App.css';
+import FileManagementPanel from './components/FileManagementPanel/FileManagementPanel';
+import './App.scss';
 
 function App() {
   return (
@@ -11,16 +10,17 @@ function App() {
       <div className="App">
         <nav>
           <ul>
-            <li><Link to="/">Dashboard</Link></li>
-            <li><Link to="/model-management">Model Management</Link></li>
-            <li><Link to="/payload-bay">Payload Bay</Link></li>
+            <li><Link to="/">Home</Link></li>
+            <li><Link to="/specs">Specifications</Link></li>
+            <li><Link to="/code">Code</Link></li>
+            <li><Link to="/payload">Payload Bay</Link></li>
           </ul>
         </nav>
         <Routes>
             <Route path="/" element={<Dashboard />} />
-            <Route path="/dashboard" element={<Dashboard />} />
-            <Route path="/model-management" element={<ModelManagement />} />
-            <Route path="/payload-bay" element={<PayloadBay />} />
+            <Route path="/specs" element={<FileManagementPanel contentType="specs" />} />
+            <Route path="/code" element={<FileManagementPanel contentType="code" />} />
+            <Route path="/payload" element={<FileManagementPanel contentType="payload" />} />
         </Routes>
       </div>
     </Router>

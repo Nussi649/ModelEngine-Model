@@ -54,9 +54,25 @@ class RuntimeManager:
 
     def load_module(self, module_path: str):
         """Load a new module."""
-        self.module_path = module_path
-        self.module_name = os.path.splitext(os.path.basename(module_path))[0].replace(".py", "")
-        self._load_module()
+        # Store the current state
+        old_module_path = self.module_path
+        old_module_name = self.module_name
+        
+        try:
+            # Attempt to set new module_path and module_name
+            self.module_path = module_path
+            self.module_name = os.path.splitext(os.path.basename(module_path))[0].replace(".py", "")
+            
+            # Attempt to load the new module
+            self._load_module()
+            
+        except Exception as e:
+            # If an error occurs, restore the old state
+            self.module_path = old_module_path
+            self.module_name = old_module_name
+            self._load_module()
+            # Re-raise the error with additional information, if needed
+            raise RuntimeError(f"Error loading module {module_path}: {str(e)}") from e
 
     def execute(self, code: str):
         """Execute a block of code within the managed scope."""

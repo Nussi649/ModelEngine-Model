@@ -34,6 +34,7 @@ class ModelSpecifications:
         self.model_objects = {}
         self.composites = {}
         self.indexes = []
+        self.xml_path = xml_path
         self.xsd_path = xsd_path
         self.load_file(xml_path, xml_content)
 
@@ -48,30 +49,42 @@ class ModelSpecifications:
         if xml_path is None and xml_content is None:
             raise ValueError("No XML file specified. Neither through its filepath nor directly as string.")
         
-        # Attempt to read the new XML content if a path is provided
-        if xml_path:
-            try:
+        # Store the old xml_path
+        old_xml_path = self.xml_path
+        
+        try:
+            # Attempt to read the new XML content if a path is provided
+            if xml_path:
                 with open(xml_path, 'r') as xml_file:
                     xml_content = xml_file.read()
-            except Exception as e:
-                raise IOError(f"Error reading the XML file: {e}")
+            
+            # Reset the internal data structures
+            self.model_objects = {}
+            self.composites = {}
+            self.indexes = []
 
-        # If successfully read or xml_content is provided, reset and update data structures
-        self.model_objects = {}
-        self.composites = {}
-        self.indexes = []
+            # Update the XML path
+            self.xml_path = xml_path
+            
+            # Syntactic validation against XSD
+            self._syntactic_validate(xml_content, self.xsd_path)
+            
+            # Parse XML
+            self._parse_xml(xml_content)
+            
+            # Semantic validation
+            self._semantic_validate()
 
-        # Update the XML path
-        self.xml_path = xml_path
-
-        # Syntactic validation against XSD
-        self._syntactic_validate(xml_content, self.xsd_path)
-
-        # Parse XML
-        self._parse_xml(xml_content)
-
-        # Semantic validation
-        self._semantic_validate()
+        except Exception as e:
+            # Revert to old xml_path in case of any error and reload old specifications
+            self.xml_path = old_xml_path
+            if old_xml_path:
+                with open(old_xml_path, 'r') as xml_file:
+                    old_xml_content = xml_file.read()
+                self._syntactic_validate(old_xml_content, self.xsd_path)
+                self._parse_xml(old_xml_content)
+                self._semantic_validate()
+            raise e
 
     def _syntactic_validate(self, xml_content, xsd_path):
         with open(xsd_path, 'r') as xsd_file:

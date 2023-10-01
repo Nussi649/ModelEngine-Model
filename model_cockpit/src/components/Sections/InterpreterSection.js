@@ -2,8 +2,6 @@ import React from 'react';
 import { Link } from 'react-router-dom';
 import styles from '../../styles/sectionStyles.module.scss';
 
-const backendURL = process.env.REACT_APP_BACKEND_URL;
-
 const InterpreterSection = ({ indicatorRef, isActive, onToggle }) => {
     return (
         <div className={`${styles.sectionContainer} ${styles.interpreterSection}`}>
@@ -33,11 +31,11 @@ const InterpreterSection = ({ indicatorRef, isActive, onToggle }) => {
             {/* Dynamic Button */}
             {isActive && (
                 <div className={styles.terminalContainer}>
-                    <Link to={`${backendURL}/terminal`}>
+                    <a href="/terminal">
                         <button className={styles.manageButton}>
                             <i className="fas fa-terminal"></i> Command Interface
                         </button>
-                    </Link>
+                    </a>
                 </div>
             )}
         </div>

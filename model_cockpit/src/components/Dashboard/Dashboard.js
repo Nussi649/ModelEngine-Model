@@ -28,8 +28,6 @@ const Dashboard = () => {
     const [sharedPath, setSharedPath] = useState('');
     const [dbInterpreterPath, setDbInterpreterPath] = useState('');
 
-    const backendURL = process.env.REACT_APP_BACKEND_URL;
-
     const processStatusResponse = (res) => {
         // Assuming statusResponse is something like:
         // { specsActive: true, runtimeActive: false, ... , specsFilename: "somefile.xml", ... }
@@ -54,7 +52,7 @@ const Dashboard = () => {
         // actions would be an array of objects like [{ section: 'specs', action: 'activate' }, { section: 'runtime', action: 'deactivate' }, ...]
         
         try {
-            const response = await fetch(`${backendURL}/component-set-state`, {
+            const response = await fetch('/component-set-state', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ actions })
@@ -130,7 +128,7 @@ const Dashboard = () => {
         // components would be an array like ['specs', 'runtime', 'database', 'interpreter']
         
         try {
-            const response = await fetch(`${backendURL}/component-status`, {
+            const response = await fetch('/component-status', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ components })
@@ -150,10 +148,10 @@ const Dashboard = () => {
             let endpoint;
             switch (action) {
                 case 'wipe':
-                    endpoint = `${backendURL}/db-wipe`;
+                    endpoint = '/db-wipe';
                     break;
                 case 'setup':
-                    endpoint = `${backendURL}/db-init`;
+                    endpoint = '/db-init';
                     break;
                 default:
                     console.error('Invalid database action:', action);

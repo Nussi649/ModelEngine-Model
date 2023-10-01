@@ -29,16 +29,15 @@ function FileManagementPanel({ contentType, customAction }) {
     const [selectedFile, setSelectedFile] = useState('');
     const [fileContent, setFileContent] = useState('');
     const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
-
-    const backendURL = process.env.REACT_APP_BACKEND_URL;
     
-    const fileListEndpoint = `${backendURL}/file-list/${contentType}`;
-    const fileContentEndpoint = `${backendURL}/file-content/${contentType}`;
-    const fileUploadEndpoint = `${backendURL}/upload-file/${contentType}`;
-    const fileDeleteEndpoint = `${backendURL}/delete-file/${contentType}`;
-    const activateEndpoint = `${backendURL}/activate/${contentType}`;
+    const fileListEndpoint = `/file-list/${contentType}`;
+    const fileContentEndpoint = `/file-content/${contentType}`;
+    const fileUploadEndpoint = `/upload-file/${contentType}`;
+    const fileDeleteEndpoint = `/delete-file/${contentType}`;
+    const activateEndpoint = `/activate/${contentType}`;
 
     const fileInputRef = useRef();
+    const textAreaRef = useRef();
     
     const fetchFileList = async () => {
         try {
@@ -163,6 +162,25 @@ function FileManagementPanel({ contentType, customAction }) {
         fetchFileList();
     }, [contentType]);
 
+    useEffect(() => {
+        const handleKeyDown = (event) => {
+            if (event.ctrlKey && event.key === 's') {
+                event.preventDefault();
+                handleSave();
+            }
+        };
+    
+        const textarea = textAreaRef.current;
+        if (textarea) { // Check if textarea exists in the DOM
+            textarea.addEventListener('keydown', handleKeyDown);
+    
+            // Cleanup: remove event listener when component is unmounted or when textarea is removed from the DOM
+            return () => {
+                textarea.removeEventListener('keydown', handleKeyDown);
+            };
+        }
+    });
+
     // Helper function to determine the allowed file types based on contentType
     const getAllowedFileTypes = () => {
         switch (contentType) {
@@ -229,6 +247,7 @@ function FileManagementPanel({ contentType, customAction }) {
                     <div className={styles.textSection}>
                         {/* Text area for file content */}
                         <textarea 
+                            ref={textAreaRef}
                             value={fileContent} 
                             onChange={(e) => handleContentChange(e.target.value)} 
                             className={styles.textArea}

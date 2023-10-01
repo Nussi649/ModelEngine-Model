@@ -7,7 +7,7 @@
 
 .specsStyle {
     background-color: lightblue;
-    /* other specs-specific styles */
+    /* other specs-specific stylesSSS */
 }
 
 .codeStyle {

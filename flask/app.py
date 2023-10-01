@@ -1,7 +1,6 @@
 import os
 import threading
 from flask import Flask, render_template, jsonify, request
-from flask_cors import CORS ###################################### REMOVE FOR PRODUCTION #######################
 from dotenv import load_dotenv
 from neo4j import GraphDatabase
 from werkzeug.utils import secure_filename
@@ -14,7 +13,6 @@ import logging
 
 load_dotenv()
 app = Flask(__name__, template_folder="templates")
-CORS(app)                   ###################################### REMOVE FOR PRODUCTION #######################
 URI = "neo4j://neo4j:7687"
 AUTH = ("neo4j", os.getenv("NEO4J_PASSWORD"))
 RESET_PASSWORD ="K€N0Bi"
@@ -46,13 +44,9 @@ def terminal_input():
 # Configure the logging level and format
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# Create a separate thread to run the terminal_input function
-terminal_thread = threading.Thread(target=terminal_input)
-terminal_thread.start()
-
 @app.route("/")
-def status():
-    return jsonify({"status": "ok", "password": "lol"}), 200
+def index():
+    return render_template('index.html')
 
 @app.route("/flask-health-check")
 def flask_health_check():
@@ -238,25 +232,6 @@ def set_component_state():
         response.status_code = 400
         return response
 #endregion
-
-@app.route('/model-state', methods=['GET'])
-def get_model_state():
-    # Fetching basic database stats
-    stats = MODEL_DB.get_stats()
-
-    # Fetching the currently loaded specifications' name
-    specs_filepath = MODEL_SPECIFICATIONS.xml_path
-    specs_filename = os.path.basename(specs_filepath)
-
-    # Fetching the currently loaded code's name
-    code_filepath = RUNTIME_MANAGER.module_path
-    code_filename = os.path.basename(code_filepath)
-
-    # Appending additional data to the stats dict
-    stats['specsFilename'] = specs_filename
-    stats['codeFilename'] = code_filename
-
-    return jsonify(stats)
 
 ###########################################################
 ##################### FILE MANAGEMENT #####################

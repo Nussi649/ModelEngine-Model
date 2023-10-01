@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import styles from '../../styles/sectionStyles.module.scss';
 
 const DatabaseSection = ({ indicatorRef, isActive, onToggle, stats, onWipe, onInitialize }) => {

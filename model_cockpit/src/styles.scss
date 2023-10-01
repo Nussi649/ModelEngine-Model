@@ -11,10 +11,21 @@ $text: #000000;
 // Section Specific Colors
 $specs-background: #003366;
 $specs-accent: #66ccff;
-$code-background: #006600;
+//$code-background: #006600;
+$code-background: #3a3a3a;
 $code-accent: #99ff99;
-$payload-background: #cf4200;
-$payload-accent: #ffcc99;
+$database-background: #00494d;
+$database-accent: #4dd0e1;
+$payload-background: #8a5a2a;
+$payload-accent: #ffe0b2;
+
+// Indicator Colors
+$active-color: green;
+$inactive-color: red;
+
+// Toggle Switch Colors
+$toggle-background-color-off: #ccc;
+$toggle-background-color-on: #2196F3;
 
 // Typography
 body {

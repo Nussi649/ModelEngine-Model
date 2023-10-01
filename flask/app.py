@@ -22,8 +22,8 @@ RESET_PASSWORD ="K€N0Bi"
 DIRECTORY_SPECS = "/workspace/data_models/"
 DIRECTORY_CODE = "/workspace/data_models/model_code/"
 DIRECTORY_PAYLOAD = "/workspace/payload_bay/"
-DEFAULT_SPECS = "FinanceHelper.xml"
-DEFAULT_CODE = "FinanceHelper_v1.py"
+SPECIFICATIONS_FILE = "FinanceHelper.xml"
+MODEL_CODE_FILE = "FinanceHelper_v1.py"
 
 VALID_FILETYPES = {
     'specs': (DIRECTORY_SPECS, '.xml'),
@@ -31,11 +31,10 @@ VALID_FILETYPES = {
     'payload': (DIRECTORY_PAYLOAD, '*')
     }
 
-RUNTIME_MANAGER = RuntimeManager(DIRECTORY_CODE + DEFAULT_CODE)
-MODEL_SPECIFICATIONS = ModelSpecifications(xml_path=DIRECTORY_SPECS + DEFAULT_SPECS,
-                                           xsd_path=DIRECTORY_SPECS + "format_specifications/dm_specification_schema.xsd")
-MODEL_DB = ModelDB(MODEL_SPECIFICATIONS, RUNTIME_MANAGER, URI, AUTH)
-MODEL_INTERPRETER = ModelInterpreter(RUNTIME_MANAGER, MODEL_SPECIFICATIONS, MODEL_DB)
+RUNTIME_MANAGER = None
+MODEL_SPECIFICATIONS = None
+MODEL_DB = None
+MODEL_INTERPRETER = None
 
 # Function to handle terminal input
 def terminal_input():
@@ -94,6 +93,152 @@ def process_request():
 def terminal():
     return render_template('terminal.html')
 
+############################################################
+################### COMPONENT MANAGEMENT ###################
+############################################################
+#region component management
+def start_component(component_name):
+    global MODEL_INTERPRETER, MODEL_DB, MODEL_SPECIFICATIONS, RUNTIME_MANAGER
+    
+    if component_name == 'specs':
+        logging.info('Starting specs component.')
+        MODEL_SPECIFICATIONS = ModelSpecifications(xml_path=DIRECTORY_SPECS + SPECIFICATIONS_FILE,
+                                                   xsd_path=DIRECTORY_SPECS + "format_specifications/dm_specification_schema.xsd")
+    elif component_name == 'runtime':
+        logging.info('Starting runtime component.')
+        RUNTIME_MANAGER = RuntimeManager(DIRECTORY_CODE + MODEL_CODE_FILE)
+    elif component_name == 'database':
+        if MODEL_SPECIFICATIONS is None:
+            logging.info('Specs component is not active. Starting specs component as it is a prerequisite for the database component.')
+            start_component('specs')
+        if RUNTIME_MANAGER is None:
+            logging.info('Runtime component is not active. Starting runtime component as it is a prerequisite for the database component.')
+            start_component('runtime')
+        logging.info('Starting database component.')
+        MODEL_DB = ModelDB(MODEL_SPECIFICATIONS, RUNTIME_MANAGER, URI, AUTH)
+    elif component_name == 'interpreter':
+        if MODEL_DB is None:
+            logging.info('Database component is not active. Starting database component as it is a prerequisite for the interpreter component.')
+            start_component('database')
+        logging.info('Starting interpreter component.')
+        MODEL_INTERPRETER = ModelInterpreter(RUNTIME_MANAGER, MODEL_SPECIFICATIONS, MODEL_DB)
+    else:
+        raise ValueError(f"Invalid component name: {component_name}")
+    
+def stop_component(component_name):
+    global MODEL_INTERPRETER, MODEL_DB, MODEL_SPECIFICATIONS, RUNTIME_MANAGER
+
+    if component_name == 'specs':
+        if MODEL_INTERPRETER is not None:
+            logging.warning('Stopping interpreter as specs component is being stopped.')
+            MODEL_INTERPRETER = None
+        if MODEL_DB is not None:
+            logging.warning('Stopping database as specs component is being stopped.')
+            MODEL_DB = None
+        logging.info('Stopping specs component.')
+        MODEL_SPECIFICATIONS = None
+    elif component_name == 'runtime':
+        if MODEL_INTERPRETER is not None:
+            logging.warning('Stopping interpreter as runtime component is being stopped.')
+            MODEL_INTERPRETER = None
+        if MODEL_DB is not None:
+            logging.warning('Stopping database as runtime component is being stopped.')
+            MODEL_DB = None
+        logging.info('Stopping runtime component.')
+        RUNTIME_MANAGER = None
+    elif component_name == 'database':
+        if MODEL_INTERPRETER is not None:
+            logging.warning('Stopping interpreter as database component is being stopped.')
+            MODEL_INTERPRETER = None
+        logging.info('Stopping database component.')
+        MODEL_DB = None
+    elif component_name == 'interpreter':
+        logging.info('Stopping interpreter component.')
+        MODEL_INTERPRETER = None
+    else:
+        raise ValueError(f"Invalid component name: {component_name}")
+    
+@app.route('/component-status', methods=['POST'])
+def component_status():
+    try:
+        # Extract the components whose status needs to be fetched from the request data.
+        data = request.json
+        components = data.get('components', [])
+        
+        status = {}
+        
+        for component in components:
+            if component == 'specs':
+                status['specsActive'] = MODEL_SPECIFICATIONS is not None
+                status['specsFilename'] = SPECIFICATIONS_FILE  # This can be None
+                
+            elif component == 'runtime':
+                status['runtimeActive'] = RUNTIME_MANAGER is not None
+                status['codeFilename'] = MODEL_CODE_FILE  # This can be None
+                
+            elif component == 'database':
+                status['databaseActive'] = MODEL_DB is not None
+                if MODEL_DB:
+                    db_stats = MODEL_DB.get_stats()
+                    status.update(db_stats)  # Add additional database stats to the response
+                    
+            elif component == 'interpreter':
+                status['interpreterActive'] = MODEL_INTERPRETER is not None
+                
+        return jsonify(status)
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400  # Respond with an error message in case of an exception
+    
+@app.route('/component-set-state', methods=['POST'])
+def set_component_state():
+    try:
+        actions = request.json
+        if isinstance(actions, dict) and 'actions' in actions:
+            actions = actions['actions']
+        if not isinstance(actions, list):
+            raise ValueError("Invalid input: Expected a list of actions")
+        
+        # return variable, gets filled with relevant status information
+        status = {}
+        
+        for action in actions:
+            component_name = action.get('component')
+            action_type = action.get('action')
+            
+            if action_type == 'start':
+                start_component(component_name)
+            elif action_type == 'stop':
+                stop_component(component_name)
+            else:
+                raise ValueError(f"Invalid action type: {action_type} for component {component_name}")
+            
+            # compile responses by adding the corresponding attributes
+            if component_name == 'specs':
+                status['specsActive'] = MODEL_SPECIFICATIONS is not None
+                status['specsFilename'] = SPECIFICATIONS_FILE  # This can be None
+                
+            elif component_name == 'runtime':
+                status['runtimeActive'] = RUNTIME_MANAGER is not None
+                status['codeFilename'] = MODEL_CODE_FILE  # This can be None
+                
+            elif component_name == 'database':
+                status['databaseActive'] = MODEL_DB is not None
+                if MODEL_DB:
+                    db_stats = MODEL_DB.get_stats()
+                    status.update(db_stats)  # Add additional database stats to the response
+                    
+            elif component_name == 'interpreter':
+                status['interpreterActive'] = MODEL_INTERPRETER is not None
+        
+        return jsonify(status)
+    
+    except ValueError as ve:
+        response = jsonify({"error": str(ve)})
+        response.status_code = 400
+        return response
+#endregion
+
 @app.route('/model-state', methods=['GET'])
 def get_model_state():
     # Fetching basic database stats
@@ -113,6 +258,10 @@ def get_model_state():
 
     return jsonify(stats)
 
+###########################################################
+##################### FILE MANAGEMENT #####################
+###########################################################
+# region file stuff
 @app.route('/file-list/<contentType>', methods=['GET'])
 def get_file_list(contentType):
     try:
@@ -233,16 +382,52 @@ def activate(filetype, filename):
     if not os.path.exists(filepath):
         return jsonify({"error": "File not found"}), 404
     
+    global SPECIFICATIONS_FILE, MODEL_CODE_FILE
     try:
         if filetype == "specs":
-            MODEL_SPECIFICATIONS.load_file(xml_path=filepath)
+            SPECIFICATIONS_FILE = filename
+            if MODEL_SPECIFICATIONS is not None:
+                MODEL_SPECIFICATIONS.load_file(xml_path=filepath)
         elif filetype == "code":
-            RUNTIME_MANAGER.load_module(filepath)
+            MODEL_CODE_FILE = filename
+            if RUNTIME_MANAGER is not None:
+                RUNTIME_MANAGER.load_module(filepath)
         else:
             return
         return jsonify({"success": f"{filename} ({filetype}) activated successfully!"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+#endregion
+
+###########################################################
+################### DATABASE MANAGEMENT ###################
+###########################################################
+# region database stuff
+@app.route('/db-wipe', methods=['POST'])
+def db_wipe():
+    if MODEL_DB is not None:
+        try:
+            MODEL_DB.wipe_content()
+            stats = MODEL_DB.get_stats()
+            return jsonify(stats), 200
+        except Exception as e:
+            return jsonify({"status": "error", "message": f"Error wiping the database: {str(e)}"}), 500
+    else:
+        return jsonify({"status": "error", "message": "Database component is not active!"}), 400
+
+
+@app.route('/db-init', methods=['POST'])
+def db_init():
+    if MODEL_DB is not None:
+        try:
+            MODEL_DB.create_indexes()
+            stats = MODEL_DB.get_stats()
+            return jsonify(stats), 200
+        except Exception as e:
+            return jsonify({"status": "error", "message": f"Error initializing the database: {str(e)}"}), 500
+    else:
+        return jsonify({"status": "error", "message": "Database component is not active!"}), 400
+# endregion
 
 if __name__ == "__main__":
     app.run(

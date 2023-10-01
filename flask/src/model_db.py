@@ -65,23 +65,37 @@ class ModelDB:
         if class_name not in self.model_specs.model_objects:
             raise ValueError(f"Class {class_name} not recognized.")
         return self.runtime.get_attr(class_name)
+    
+    def wipe_content(self):
+        with self.driver.session() as session:
+            # Drop constraints and indexes
+            try:
+                constraints = session.run("CALL db.constraints").data()
+                indexes = session.run("CALL db.indexes").data()
+                for constraint in constraints:
+                    session.run(f"DROP CONSTRAINT {constraint['name']}")
+                for index in indexes:
+                    session.run(f"DROP INDEX {index['name']}")
+            except Exception as e:
+                print(f"Error dropping constraints and indexes: {e}")
 
+            # Delete all nodes and relationships
+            try:
+                session.run("MATCH (n) DETACH DELETE n")
+            except Exception as e:
+                print(f"Error deleting nodes and relationships: {e}")
+            
     def create_indexes(self):
         indexes = self.model_specs.get_indexes()
         with self.driver.session() as session:
-            tx = session.begin_transaction()
             for attribute in indexes:
                 type_name = attribute['type_name']
                 attr_name = attribute['attribute_name']
                 query = f"CREATE INDEX index_{type_name}_{attr_name} IF NOT EXISTS FOR (n:{type_name}) ON (n.{attr_name})"
                 try:
-                    result = tx.run(query)
-                    if result.consume().counters.contains_updates():
-                        raise ValueError(f"Unexpected database change when creating index for {type_name} on {attr_name}.")
+                    session.run(query)  # Run the query to create the index, no need to check for database changes.
                 except Exception as e:
-                    tx.rollback()
                     raise ValueError(f"Error creating index for {type_name} on {attr_name}. Details: {str(e)}")
-            tx.commit()
 
     def _objects_match(self, obj1, obj2) -> bool:
         """
@@ -833,7 +847,6 @@ class ModelDB:
                 composites.append(composite_data)
 
             return composites
-
 
     def delete_object(self, class_name: str, key: str, tx=None): # TODO: Test
         """

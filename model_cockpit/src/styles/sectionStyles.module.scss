@@ -1,0 +1,225 @@
+@import '../styles.scss'; // Import global styles
+
+.sectionContainer {
+    border: 1px solid #ccc;
+    min-width: 200px;
+    padding: 10px;
+    margin-bottom: 20px;
+    margin-left: 70px;
+    margin-right: 70px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    border-radius: 10px; // Adding rounded corners
+    box-shadow: 0px 4px 6px rgba(0, 0, 0, 0.1); // Adding shadow for a sophisticated look
+}
+
+.title {
+    font-size: 1.5rem;
+    font-weight: bold;
+    margin-block-end: 5px;
+    margin-block-start: 2px;
+}
+
+.iconContainer {
+    text-align: center;
+    font-size: 50px; /* Adjust the size of the Font Awesome icons */
+}
+
+.toggleSection {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.filesSection {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    margin-left: 5px;
+    margin-right: 5px;
+    padding: 10px; // Optional: Add padding if highlighting with background or border
+    border-radius: 5px; // Optional: If applying a background or border
+}
+
+.fileNameLabel {
+    font-size: 1rem;
+    font-weight: bold;
+    margin-bottom: 0.5rem; // Adjust as needed
+}
+
+.title, .fileNameLabel {
+    color: $text; // Consistent text color
+}
+
+.manageButton {
+    cursor: pointer;
+    border-radius: 10px; // Rounded corners
+    border: none; // Remove default border
+    padding: 5px 10px; // Adjust as needed
+    transition: background-color 0.3s ease; // Smooth transition for hover effect
+
+    i {
+        margin-right: 3px;
+    }
+}
+
+.switch {
+    position: relative;
+    display: inline-block;
+    width: 60px;
+    height: 34px;
+    margin-top: 10px;
+    margin-bottom: 10px;
+}
+
+.slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: $inactive-color;
+    transition: .4s;
+    border-radius: 34px; // To make it rounded
+    border: 2px solid #000; // Adding border with specified width
+    
+    &:before {
+        position: absolute;
+        content: "";
+        height: 26px; // Adjusted height to accommodate the border
+        width: 26px; // Adjusted width to accommodate the border
+        left: 2px; // Adjusted left to accommodate the border
+        bottom: 2px; // Adjusted bottom to accommodate the border
+        background-color: white;
+        transition: .4s;
+        border-radius: 50%; // To make it circular
+    }
+}
+
+.switch input:checked + .slider {
+    background-color: $active-color; // Change to the color you prefer when active
+}
+
+.switch input:checked + .slider:before {
+    transform: translateX(24px); // This should be the width of the slider minus the width of the knob
+}
+
+.specsSection {
+    background-color: $specs-background;
+    
+    .title, .fileNameLabel, .iconContainer i {
+        color: $specs-accent;
+    }
+
+    .filesSection {
+        background-color: lighten($specs-background, 5%);
+    }
+    
+    .manageButton {
+        background-color: $specs-accent;
+        color: $specs-background;
+        
+        &:hover {
+            background-color: darken($specs-accent, 10%);
+        }
+    }
+}
+
+.runtimeSection {
+    background-color: $code-background;
+    
+    .title, .fileNameLabel, .iconContainer i {
+        color: $code-accent;
+    }
+
+    .filesSection {
+        background-color: lighten($code-background, 5%);
+    }
+    
+    .manageButton {
+        background-color: $code-accent;
+        color: $code-background;
+        
+        &:hover {
+            background-color: darken($code-accent, 10%);
+        }
+    }
+}
+
+.databaseSection {
+    background-color: $database-background;
+    
+    .title, .fileNameLabel, .iconContainer i {
+        color: $database-accent;
+    }
+
+    .filesSection {
+        background-color: lighten($database-background, 5%);
+        
+        p {
+            margin: 0; // Align <p> with <ul>
+            font-weight: bold;
+        }
+        
+        ul {
+            margin-top: 0; // Reduced margin between <p> and <ul>
+            margin-bottom: 0;
+            margin-left: 5px; // Reduced left margin to align better
+            padding-left: 10px; // Adjust the padding to align the bullets
+            list-style-type: disc; // Ensure bullets are visible for the list items
+            line-height: 1.5; // Improved readability for list items
+            
+            li {
+                color: darken($database-accent, 10%); // Subtle color for list items to make them stand out
+            }
+        }
+    }
+    
+    .manageButton {
+        background-color: $database-accent;
+        color: $database-background;
+        font-weight: bold;
+        
+        &:hover {
+            background-color: darken($database-accent, 10%);
+        }
+    }
+
+    .dbControls {
+        display: flex;
+        flex-direction: column;
+        justify-content: center; // Center the buttons horizontally
+        align-items: center;
+        gap: 10px; // Space between the buttons
+    }
+}
+
+.interpreterSection {
+    background-color: $payload-background;
+    margin-top: 150px;
+    
+    .title, .fileNameLabel, .iconContainer i {
+        color: $payload-accent;
+    }
+
+    .filesSection {
+        background-color: lighten($payload-background, 5%);
+    }
+    
+    .manageButton {
+        background-color: $payload-accent;
+        color: $payload-background;
+        
+        &:hover {
+            background-color: darken($payload-accent, 10%);
+        }
+    }
+
+    .terminalContainer {
+        text-align: center;
+        margin-top: 10px;
+    }
+}

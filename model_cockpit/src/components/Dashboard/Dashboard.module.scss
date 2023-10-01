@@ -7,34 +7,27 @@
   align-items: center; // Center the content horizontally
 }
 
-.buttonContainer {
+.columnsContainer {
   display: flex;
-  margin-top: 20px;
-  gap: 20px; // Adjust as needed
-  
-  button {
-    padding: 10px 20px;
-    border-radius: 5px;
-    font-weight: bold;
-    cursor: pointer;
-    
-    &:hover {
-      background-color: lighten($secondary, 10%); // Lighten the background color by 10% on hover
-    }
-  }
-    
-  .specsButton {
-    background-color: $specs-background;
-    color: $specs-accent;
-  }
-  
-  .codeButton {
-    background-color: $code-background;
-    color: $code-accent;
-  }
-  
-  .payloadButton {
-    background-color: $payload-background;
-    color: $payload-accent;
+  justify-content: space-between;
+}
+
+.leftColumn,
+.centerColumn,
+.rightColumn {
+  display: flex;
+  flex-direction: column;
+}
+
+.connectorLines {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+  .connectorLine {
+    // Style your lines here
+    fill: none;
+    stroke: #000; // Line color
+    stroke-width: 2; // Line width
   }
 }

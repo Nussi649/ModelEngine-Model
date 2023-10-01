@@ -1,13 +1,13 @@
 import os
 from dm_specs import ModelSpecifications
-from code_generation import generate_class_code
+from code_generation import generate_class_code, generate_composite
 
 
 import_statements = [
     "from typing import List, Optional, Union",
     "from abc import ABC",
     "from datetime import datetime",
-    "from model_entity import ModelEntity"
+    "from core import *"
 ]
 
 # region Additional Helper Functions for XML Parsing
@@ -35,7 +35,7 @@ def process_file(input_path: str, output_path: str):
 
     # Collect Relationship Inverses
     relationship_inverses = {}
-    for _, class_details in model_specs.classes.items():
+    for _, class_details in model_specs.model_objects.items():
         for ref_name, ref_details in class_details.get("references", {}).items():
             inv = ref_details.get("inverse")
             if inv is not None:
@@ -50,9 +50,13 @@ def process_file(input_path: str, output_path: str):
         "register = {}"
     ]
 
-    # Iterate through all classes and generate corresponding code
-    for class_name, class_details in model_specs.classes.items():
+    # Iterate through all ModelObjects and generate corresponding code
+    for class_name, class_details in model_specs.model_objects.items():
         generated_python_code.append(generate_class_code(class_name, class_details))
+
+    # Iterate through all Composites and generate corresponding code
+    for comp_name, comp_details in model_specs.composites.items():
+        generated_python_code.append(generate_composite(comp_name, comp_details))
 
     # Concatenate code lines
     final_code = "\n\n".join(generated_python_code)
@@ -72,7 +76,7 @@ def process_file(input_path: str, output_path: str):
 if __name__ == "__main__":
     #script_directory = os.path.dirname(os.path.abspath(__file__))
     #in_path = os.path.join(script_directory, "datamodels", "ResourceTransmission_v1.xml")
-    in_path = "data_models/ResourceTransmission_v1.xml"
-    out_path = "../model_code/test.py"
+    in_path = "dm_transformer/data_models/FinanceHelper.xml"
+    out_path = "dm_transformer/data_models/model_code/FinanceHelper.py"
 
     process_file(in_path, out_path)

@@ -1,0 +1,33 @@
+// Dashboard.module.scss
+@import '../../styles.scss'; // Import global styles
+
+.dashboard {
+  display: flex;
+  flex-direction: column;
+  align-items: center; // Center the content horizontally
+}
+
+.columnsContainer {
+  display: flex;
+  justify-content: space-between;
+}
+
+.leftColumn,
+.centerColumn,
+.rightColumn {
+  display: flex;
+  flex-direction: column;
+}
+
+.connectorLines {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+  .connectorLine {
+    // Style your lines here
+    fill: none;
+    stroke: #000; // Line color
+    stroke-width: 2; // Line width
+  }
+}

@@ -1,0 +1,56 @@
+// Importing Roboto font
+@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap');
+
+// Color Palette
+$primary: #1a73e8;
+$secondary: #ffffff;
+$accent: #ff5722;
+$background: #f4f4f4;
+$text: #000000;
+
+// Section Specific Colors
+$specs-background: #003366;
+$specs-accent: #66ccff;
+//$code-background: #006600;
+$code-background: #3a3a3a;
+$code-accent: #99ff99;
+$database-background: #00494d;
+$database-accent: #4dd0e1;
+$payload-background: #8a5a2a;
+$payload-accent: #ffe0b2;
+
+// Indicator Colors
+$active-color: green;
+$inactive-color: red;
+
+// Toggle Switch Colors
+$toggle-background-color-off: #ccc;
+$toggle-background-color-on: #2196F3;
+
+// Typography
+body {
+  font-family: 'Roboto', sans-serif;
+  color: $text;
+  background-color: $background;
+}
+
+h1 {
+  font-weight: 700;
+  font-size: 2em;
+  margin-bottom: 20px;
+}
+
+p {
+  font-weight: 400;
+  font-size: 1em;
+  line-height: 1.6em;
+}
+
+a {
+  text-decoration: none;
+  color: $primary;
+
+  &:hover {
+    text-decoration: underline;
+  }
+}

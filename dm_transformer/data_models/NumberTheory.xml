@@ -1,0 +1,7 @@
+<Entities>
+    <ModelObject name="Number">
+        <Attribute type="text" is_key="true" required="true">value</Attribute>
+        <Attribute type="boolean" required="true">prime</Attribute>
+        <Reference type="Number" multiplicity="multi" required="false">factors</Reference>
+    </ModelObject>
+</Entities>

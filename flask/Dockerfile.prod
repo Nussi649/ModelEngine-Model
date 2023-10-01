@@ -1,0 +1,24 @@
+# Use a more specific base image
+FROM python:3.11-slim
+
+# Create a non-root user
+RUN adduser --disabled-password --gecos '' nonroot
+
+# Set up the working directory
+WORKDIR /workspace
+
+# Copy the requirements file and install dependencies
+COPY ./flask/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy the source code
+COPY ./flask .
+COPY ./dm_transformer/dm_specs.py ./src/dm_specs.py
+COPY ./dm_transformer/data_models ./data_models
+COPY ./dm_transformer/data_models/model_code/core.py ./src/core.py
+
+# Use non-root user to run the app
+USER nonroot
+
+# Start the Flask app
+CMD ["flask", "run", "--host=0.0.0.0", "--port=5000"]

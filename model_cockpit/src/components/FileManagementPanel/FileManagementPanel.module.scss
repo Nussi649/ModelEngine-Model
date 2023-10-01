@@ -1,0 +1,140 @@
+// FileManagementPanel.module.scss
+@import '../../styles.scss'; // Import global styles
+
+.fileManagementPanel {
+  border-radius: 10px;
+  // Define generic styles for the File Management Panel here, using the color variables defined above.
+  
+  &.specs {
+    background-color: $specs-background;
+    color: $secondary;
+    
+    // Style other elements and states using the specs color scheme
+  }
+  
+  &.code {
+    background-color: $code-background;
+    color: $secondary;
+    
+    // Style other elements and states using the code color scheme
+  }
+  
+  &.payload {
+    background-color: $payload-background;
+    color: $secondary;
+    
+    // Style other elements and states using the payload color scheme
+  }
+}
+
+h1 {
+    margin-block-start: 0px;
+    margin-inline-start: 20px;
+    padding-top: 10px;
+}
+
+.commonPanelStyles {
+    padding: 10px;
+    display: flex;
+    flex-direction: row;
+    height: 75vh;
+}
+
+.listActions {
+    display: flex;
+    justify-content: space-between;
+    width: 100%; // Make sure the container takes up the full width
+    
+    button {
+        margin-left: 10px;
+        i {
+            margin-right: 5px;
+        }
+    }
+}
+  
+.fileListContainer {
+    width: 500px;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    overflow-y: auto;
+    padding-right: 20px;
+}
+  
+.fileList {
+    list-style-type: none;
+    padding: 0;
+    width: 100%;
+}
+  
+.listItem, .selectedListItem {
+    display: flex;
+    justify-content: space-between;
+    width: 100%;
+    align-items: center;
+    padding: 5px;
+    cursor: pointer;
+}
+  
+.listItem {
+    background-color: #f1f1f1;
+    color: #333;
+}
+  
+.selectedListItem {
+    background-color: #d1d1d1;
+    color: #111;
+    font-weight: bold;
+}
+
+.uploadButton {
+    display: flex;
+    align-items: center;
+
+    i {
+        margin-right: 5px; // Add some space between the icon and the text
+        color: #333; // Adjust color as needed
+    }
+}
+
+.deleteButton {
+    display: flex;
+    align-items: center;
+
+    i {
+        margin-right: 5px; // Add some space between the icon and the text
+        color: #333; // Adjust color as needed
+    }
+}
+
+.textSection {
+    display: flex;
+    flex-direction: column; // Stack textarea and buttons vertically
+    width: 100%;
+    
+    textarea {
+        flex: 1;
+        resize: none;
+        // Additional styles as needed
+        padding: 10px;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        margin-top: 10px; // Adjust as needed
+    }
+}
+  
+.textActions {
+    display: flex;
+    gap: 10px; // Add some space between the buttons
+    justify-content: space-between;
+    width: 100%; // Make sure the container takes up the full width
+}
+
+.saveButton, .revertButton {
+    margin: 10px; // Adjust as needed
+    
+    i {
+        margin-right: 5px;
+    }
+}

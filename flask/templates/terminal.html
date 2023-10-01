@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Terminal Interface</title>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Lato:wght@400;700&display=swap">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/jquery.terminal/css/jquery.terminal.min.css"/>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+    <script>
+        const executeURL = '{{ url_for("process_request") }}';
+    </script>
+</head>
+<body>
+    <!-- Left sidebar for Model Objects -->
+    <aside id="model-objects-pane">
+        <div class="object-list">
+            <h2>Model Objects</h2>
+            <table id="model-objects-table">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Content</th>
+                    </tr>
+                </thead>
+                <tbody id="model-objects-content">
+                    <!-- Model object entries will be populated here -->
+                </tbody>
+            </table>
+        </div>
+    </aside>
+
+    <div id="terminal"></div>
+
+    <!-- Right sidebar for Runtime Objects -->
+    <aside id="runtime-objects-pane">
+        <h2>Runtime Objects</h2>
+        
+        <!-- Lists section -->
+        <div id="lists-section">
+            <h3>Lists</h3>
+            <table id="lists-table">
+                <thead>
+                    <tr>
+                        <th>Type</th>
+                        <th>Value</th>
+                    </tr>
+                </thead>
+                <tbody id="lists-content">
+                    <!-- List entries will be populated here -->
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Dicts section -->
+        <div id="dicts-section">
+            <h3>Dicts</h3>
+            <table id="dicts-table">
+                <thead>
+                    <tr>
+                        <th>Key</th>
+                        <th>Type</th>
+                        <th>Value</th>
+                    </tr>
+                </thead>
+                <tbody id="dicts-content">
+                    <!-- Dict entries will be populated here -->
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Variables section -->
+        <div id="variables-section">
+            <h3>Variables</h3>
+            <table id="variables-table">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Value</th>
+                    </tr>
+                </thead>
+                <tbody id="variables-content">
+                    <!-- Variable entries will be populated here -->
+                </tbody>
+            </table>
+        </div>
+    </aside>
+    
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jquery.terminal/js/jquery.terminal.min.js"></script>
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>

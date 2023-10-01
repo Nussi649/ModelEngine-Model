@@ -1,0 +1,30 @@
+<Entities>
+
+    <!-- ModelObject: PayAcc -->
+    <ModelObject name="PayAcc">
+        <Attribute type="text" is_key="true" required="true">name</Attribute>
+        <Collection type="Tx">transactions</Collection>
+        <Collection type="TimeSeriesPoint">account_balance</Collection>
+    </ModelObject>
+
+    <!-- ModelObject: InvAcc -->
+    <ModelObject name="InvAcc">
+        <Attribute type="text" is_key="true" required="true">name</Attribute>
+        <Collection type="Tx">transactions</Collection>
+        <Collection type="TimeSeriesPoint">expenses</Collection>
+    </ModelObject>
+
+    <!-- Composite: Tx -->
+    <Composite name="Tx">
+        <Attribute type="float" indexed="true">amount</Attribute>
+        <Attribute type="text" indexed="true">description</Attribute>
+        <Attribute type="datetime" indexed="true">timestamp</Attribute>
+    </Composite>
+
+    <!-- Composite: TimeSeriesPoint -->
+    <Composite name="TimeSeriesPoint">
+        <Attribute type="float" indexed="true">value</Attribute>
+        <Attribute type="datetime" indexed="true">timestamp</Attribute>
+    </Composite>
+
+</Entities>

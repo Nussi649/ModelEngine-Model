@@ -1,0 +1,85 @@
+.commonPanelStyles {
+    padding: 20px;
+    display: flex;
+    flex-direction: row;
+    height: 100vh;
+}
+
+.specsStyle {
+    background-color: lightblue;
+    /* other specs-specific stylesSSS */
+}
+
+.codeStyle {
+    background-color: lightcoral;
+    /* other code-specific styles */
+}
+
+.payloadStyle {
+    background-color: lightgoldenrodyellow;
+    /* other payload-specific styles */
+}
+
+.listActions {
+    display: flex;
+    justify-content: space-between; /* or space-around depending on your preference */
+    margin-bottom: 10px; /* or any other value that suits your design */
+}
+
+.activateButton {
+    background-color: #4CAF50; /* Green */
+    border: none;
+    color: white;
+    padding: 8px 16px;
+    text-align: center;
+    text-decoration: none;
+    display: inline-block;
+    font-size: 16px;
+    margin: 4px 2px;
+    cursor: pointer;
+    border-radius: 8px;
+}
+
+.fileListContainer {
+    width: 400px; /* As mentioned */
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start; /* To align items to the start of the container */
+    overflow-y: auto; /* For scroll */
+    padding-right: 20px; /* To give some space between the list and the textarea */
+}
+
+.fileList {
+    list-style-type: none;
+    padding: 0;
+    width: 100%; //Hello
+}
+
+.listItem, .selectedListItem {
+    display: flex;
+    justify-content: space-between;
+    width: 100%;
+    align-items: center;
+    padding: 5px;
+    cursor: pointer;
+}
+
+.listItem {
+    background-color: #f1f1f1; /* or any light color of your choice */
+}
+
+.selectedListItem {
+    background-color: #d1d1d1; /* or any darker color of your choice */
+    font-weight: bold; /* Or any other styling to highlight the selected item */
+}
+
+textarea {
+    flex: 1; /* To take up the remaining space */
+    resize: none; /* To disable user resizing, optional */
+}
+
+.actionButtons {
+    display: flex;
+    justify-content: space-between; /* To give equal space between the buttons */
+    padding-top: 10px; /* To give some space above the buttons */
+}

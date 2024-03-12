@@ -4,8 +4,8 @@ System for Running a Model Instance and its Interpreter.
 Contains Sub-Systems:
 
 # Data Model Transformer
-* Transforms a Data Model Specification file (XML) into the corresponding Model Code
-* Defines ModelSpecifications class, which loads such a Specification file, validates it against the Schema and provides easily accessible information about the Model Specifications
+* Transforms an Ontology Schema file (XML) into the corresponding Model Code
+* Defines ModelSpecifications class, which loads such a Schema file, validates it against its Meta-Schema and provides easily accessible information about the Ontology
 * dm_transformer.py provides functions for the transformation into Model Code, using a ModelSpecifications object for validation and easy access to specifications structure
 
 # Model Code

@@ -1,5 +1,8 @@
 **/__pycache__/
+.devcontainer/
 .vscode/
 model_cockpit/node_modules/
 model_cockpit/build/
 neo4j/
+.env
+docker-compose.yml

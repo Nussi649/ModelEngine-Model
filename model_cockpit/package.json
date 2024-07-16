@@ -19,7 +19,7 @@
     "react-router-dom": "^6.23.1"
   },
   "devDependencies": {
-    "react-scripts": "^3.0.1"
+    "react-scripts": "^5.0.1"
   },
   "browserslist": {
     "production": [
